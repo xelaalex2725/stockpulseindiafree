@@ -25,6 +25,7 @@ footer{border-top:1px solid var(--line);background:#fff;padding:20px 5vw;display
 
 .analysis-section{padding:30px;min-height:600px}
 .analysis-section h2{font:800 24px Manrope;margin:0 0 25px;color:var(--ink)}
+.dividend-heading{display:flex;justify-content:space-between;align-items:start;gap:15px;margin-bottom:22px}.dividend-heading h2{margin-bottom:6px}.dividend-heading p{margin:0;color:var(--muted);font-size:12px}.dividend-count{padding:7px 10px;border-radius:8px;background:#fff5e5;color:var(--amber);font-size:10px;font-weight:800;white-space:nowrap}.dividend-table td{vertical-align:middle}.dividend-date{font-weight:700;color:var(--blue)}.dividend-amount{font-weight:800;color:var(--teal)}.dividend-details{background:linear-gradient(135deg,#f1f4ff,#eefaf7)}
 .table-wrapper{overflow-x:auto;border:1px solid var(--line);border-radius:12px}
 .analysis-table{width:100%;border-collapse:collapse;font-size:12px}
 .analysis-table thead{background:#f7f8fb;border-bottom:2px solid var(--line)}

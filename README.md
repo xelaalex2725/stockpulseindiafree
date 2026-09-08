@@ -36,6 +36,8 @@ The development command starts both Vite and the market-data proxy. To open the 
 
 This repository includes a Vercel serverless function at `api/chart/[symbol].js`, so the live chart API is served from the same Vercel domain. No `VITE_API_BASE_URL` value is required for the standard deployment.
 
+The in-site **Dividends** tab reads the official NSE corporate-actions RSS feed through `api/dividends.js` (or `/api/dividends` in the local Express server), so it lists NSE announcements beyond the configured stock watchlist.
+
 After deployment, use the Vercel-provided URL or connect a custom domain from **Vercel > Project Settings > Domains**. The local `server.js` remains available for local development.
 
 ### Netlify

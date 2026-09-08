@@ -330,7 +330,7 @@ const STOCK_CONFIG = dedupeBySymbol([
 
 const fetchHistoricalData = async (symbol) => {
   const apiBaseUrl = import.meta.env.VITE_API_BASE_URL || '/api'
-  const requestUrl = `${apiBaseUrl}/chart/${encodeURIComponent(symbol)}?range=1y&interval=1d`
+  const requestUrl = `${apiBaseUrl}/chart/${encodeURIComponent(symbol)}?range=1y&interval=1d&events=div`
   let lastError
 
   for (let attempt = 1; attempt <= 2; attempt += 1) {
@@ -372,7 +372,12 @@ const fetchHistoricalData = async (symbol) => {
         lows: safeSlice(lows),
         closes: safeSlice(closes),
         volumes: safeSlice(volumes),
-        meta: result.meta
+        meta: result.meta,
+        dividends: Object.entries(result.events?.dividends || {}).map(([timestamp, event]) => ({
+          date: Number(timestamp),
+          amount: Number(event?.amount || 0),
+          type: event?.type || 'Cash Dividend'
+        }))
       }
     } catch (error) {
       lastError = error
@@ -388,7 +393,7 @@ const analyzeStock = async (stock) => {
   const data = await fetchHistoricalData(stock.symbol)
   if (!data) return null
   
-  const { closes, highs, lows, volumes, meta } = data
+  const { closes, highs, lows, volumes, meta, dividends } = data
   if (!closes || closes.length < 30) return null
 
   const currentPrice = Number(meta?.regularMarketPrice ?? closes[closes.length - 1])
@@ -454,6 +459,7 @@ const analyzeStock = async (stock) => {
     pattern,
     marketStructure: structure,
     chart,
+    dividends,
     high52: Math.max(...closes),
     low52: Math.min(...closes),
     riskReward: 2,
@@ -480,6 +486,9 @@ function StockAnalysisDashboard() {
   const [searchQuery, setSearchQuery] = useState('')
   const [searching, setSearching] = useState(false)
   const [searchError, setSearchError] = useState('')
+  const [nseDividends, setNseDividends] = useState([])
+  const [dividendLoading, setDividendLoading] = useState(false)
+  const [dividendError, setDividendError] = useState('')
   const [tab, setTab] = useState('top30')
   const [menu, setMenu] = useState(false)
 
@@ -553,6 +562,29 @@ function StockAnalysisDashboard() {
     const interval = setInterval(loadAnalysis, 600000) // 10 minutes
     return () => clearInterval(interval)
   }, [])
+
+  useEffect(() => {
+    const loadNseDividends = async () => {
+      setDividendLoading(true)
+      try {
+        const apiBaseUrl = import.meta.env.VITE_API_BASE_URL || '/api'
+        const response = await fetch(`${apiBaseUrl}/dividends`)
+        if (!response.ok) throw new Error(`NSE dividend feed returned ${response.status}`)
+        const data = await response.json()
+        setNseDividends(data.dividends || [])
+        setDividendError('')
+      } catch (error) {
+        console.warn('Failed to fetch NSE dividends:', error)
+        setDividendError('NSE dividend data is temporarily unavailable.')
+      } finally {
+        setDividendLoading(false)
+      }
+    }
+
+    loadNseDividends()
+    const interval = setInterval(loadNseDividends, 300000)
+    return () => clearInterval(interval)
+  }, [])
   
   const largeCaps = useMemo(() => stocks.filter(s => s.c === 'Large Cap').slice(0, 100), [stocks])
   const midCaps = useMemo(() => stocks.filter(s => s.c === 'Mid Cap').slice(0, 100), [stocks])
@@ -567,12 +599,11 @@ function StockAnalysisDashboard() {
       window.open('https://www.moneycontrol.com/news/business/markets/', '_blank', 'noopener,noreferrer')
       return
     }
-
-    setTab(label === 'Patterns' ? 'patterns' : 'top30')
+    setTab(label === 'Patterns' ? 'patterns' : label === 'Dividends' ? 'dividends' : 'top30')
     setMenu(false)
   }
 
-  const activeNav = tab === 'patterns' ? 'Patterns' : 'Analysis'
+  const activeNav = tab === 'patterns' ? 'Patterns' : tab === 'dividends' ? 'Dividends' : 'Analysis'
   
   return (
     <div className="app">
@@ -582,7 +613,7 @@ function StockAnalysisDashboard() {
           <div><b>Stock Pulse</b><span>AI ANALYSIS</span></div>
         </div>
         <nav className={menu ? 'open' : ''}>
-          {['Dashboard', 'Top 30', 'Analysis', 'Patterns', 'News'].map((x, i) => (
+          {['Dashboard', 'Top 30', 'Analysis', 'Patterns', 'News', 'Dividends'].map((x, i) => (
             <button
               key={x}
               className={x === activeNav ? 'active' : ''}
@@ -644,6 +675,9 @@ function StockAnalysisDashboard() {
           </button>
           <button className={tab === 'patterns' ? 'active' : ''} onClick={() => setTab('patterns')}>
             📊 Patterns
+          </button>
+          <button className={tab === 'dividends' ? 'active' : ''} onClick={() => setTab('dividends')}>
+            💰 Dividends ({nseDividends.length})
           </button>
         </section>
 
@@ -787,6 +821,10 @@ function StockAnalysisDashboard() {
               </section>
             )}
 
+            {tab === 'dividends' && (
+              <DividendCalendar dividends={nseDividends} loading={dividendLoading} error={dividendError} />
+            )}
+
             {selectedStock && <StockDetailPanel stock={selectedStock} onClose={() => setSelectedStock(null)} />}
           </>
         )}
@@ -863,6 +901,59 @@ function StockGrid({ stocks, onSelect }) {
         </div>
       ))}
     </div>
+  )
+}
+
+function DividendCalendar({ dividends, loading, error }) {
+  return (
+    <section className="card analysis-section dividend-section">
+      <div className="dividend-heading">
+        <div>
+          <h2>💰 DIVIDEND CALENDAR</h2>
+          <p>Live dividend announcements published by NSE corporate actions.</p>
+        </div>
+        <span className="dividend-count">NSE · {dividends.length} records</span>
+      </div>
+      {loading ? (
+        <div className="no-results">Loading the latest dividend announcements from NSE...</div>
+      ) : error ? (
+        <div className="no-results">{error}</div>
+      ) : dividends.length === 0 ? (
+        <div className="no-results">NSE has not published dividend announcements in the current feed.</div>
+      ) : (
+        <div className="table-wrapper">
+          <table className="analysis-table dividend-table">
+            <thead>
+              <tr>
+                <th>Company</th>
+                <th>Purpose</th>
+                <th>Ex-Date</th>
+                <th>Record Date</th>
+                <th>Face Value</th>
+                <th>Published</th>
+                <th>Source</th>
+              </tr>
+            </thead>
+            <tbody>
+              {dividends.map((dividend, index) => (
+                <tr key={`${dividend.company}-${dividend.exDate}-${index}`}>
+                  <td className="stock-name">
+                    <strong>{dividend.company}</strong>
+                    <small>NSE Equity</small>
+                  </td>
+                  <td>{dividend.purpose}</td>
+                  <td className="dividend-date">{dividend.exDate || '—'}</td>
+                  <td>{dividend.recordDate || '—'}</td>
+                  <td>{dividend.faceValue || '—'}</td>
+                  <td>{dividend.publishedAt ? new Date(dividend.publishedAt).toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' }) : '—'}</td>
+                  <td><span className="sector">NSE</span></td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+    </section>
   )
 }
 
@@ -1067,6 +1158,18 @@ function StockDetailPanel({ stock, onClose }) {
             <div className="fill" style={{width: `${stock.technicalScore}%`}}></div>
           </div>
         </div>
+
+        {stock.dividends?.length > 0 && (
+          <div className="support-resistance dividend-details">
+            <h3>Dividend Details</h3>
+            {stock.dividends.map(dividend => (
+              <div className="level" key={`${dividend.date}-${dividend.amount}`}>
+                <span>{new Date(dividend.date * 1000).toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' })} | {dividend.type}</span>
+                <strong>₹{dividend.amount.toFixed(2)} / share</strong>
+              </div>
+            ))}
+          </div>
+        )}
 
         <div className="external-links">
           <a href={`https://www.tradingview.com/chart/?symbol=NSE:${stock.s}`} target="_blank" rel="noreferrer">
