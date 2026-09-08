@@ -35,8 +35,9 @@ footer{border-top:1px solid var(--line);background:#fff;padding:20px 5vw;display
 .analysis-table .stock-name{display:flex;flex-direction:column;gap:4px}
 .analysis-table .stock-name strong{font-size:13px;color:var(--ink)}
 .analysis-table .stock-name small{font-size:10px;color:#8993a6}
-.analysis-table .category{display:inline-block;padding:3px 8px;background:#f0f3ff;color:var(--blue);border-radius:6px;font-size:9px;font-weight:700;width:fit-content}
+.stock-tags{display:flex;align-items:center;gap:5px;flex-wrap:wrap}.analysis-table .category,.sector{display:inline-block;padding:3px 8px;border-radius:6px;font-size:9px;font-weight:700;width:fit-content}.analysis-table .category{background:#f0f3ff;color:var(--blue)}.sector{background:#eaf8f4;color:var(--teal)}
 .analysis-table .price{font-weight:700;color:var(--ink)}
+.screener-chart-cell{width:120px;min-width:120px;padding-left:8px!important;padding-right:8px!important}.screener-chart-cell .recharts-responsive-container{min-width:100px}.chart-unavailable{font-size:10px;color:var(--muted)}
 .analysis-table .positive{color:var(--green)}
 .analysis-table .negative{color:var(--red)}
 .analysis-table .pattern-cell{display:inline-block}
@@ -66,7 +67,7 @@ footer{border-top:1px solid var(--line);background:#fff;padding:20px 5vw;display
 .rank-badge{position:absolute;top:12px;right:12px;background:var(--blue);color:#fff;width:32px;height:32px;border-radius:50%;display:flex;align-items:center;justify-content:center;font-size:12px;font-weight:800}
 .stock-header{display:flex;justify-content:space-between;align-items:start;margin-bottom:14px}
 .stock-card h3{margin:0;font:700 14px;color:var(--ink)}
-.stock-card p{margin:3px 0 0;font-size:11px;color:#8993a6}
+.stock-card p{margin:3px 0 0;font-size:11px;color:#8993a6}.card-sector{display:inline-block;margin-top:7px;padding:3px 7px;border-radius:5px;background:#fff5e5;color:var(--amber);font-size:9px;font-weight:800}
 .direction{display:inline-block;padding:4px 8px;border-radius:6px;font-size:11px;font-weight:700;background:#f0f3ff;color:var(--blue)}
 .direction.bull{background:#e5f8f0;color:var(--green)}
 .direction.bear{background:#ffe5e5;color:var(--red)}
@@ -88,7 +89,7 @@ footer{border-top:1px solid var(--line);background:#fff;padding:20px 5vw;display
 .pattern-row:hover{background:#fbfcfd}
 .pattern-stock{display:flex;flex-direction:column}
 .pattern-stock strong{font-size:13px;color:var(--ink);margin-bottom:3px}
-.pattern-stock span{font-size:11px;color:#8993a6}
+.pattern-stock span{font-size:11px;color:#8993a6}.pattern-sector{margin-top:5px;color:var(--teal)!important;font-size:10px!important;font-weight:700}
 .pattern-info-row{display:flex;gap:12px;align-items:center}
 .pattern-type{display:inline-block;padding:4px 8px;border-radius:6px;font-size:10px;font-weight:800}
 .pattern-type.bullish{background:#e5f8f0;color:var(--green)}
@@ -148,6 +149,30 @@ footer{border-top:1px solid var(--line);background:#fff;padding:20px 5vw;display
 .external-links a:hover{border-color:var(--blue);background:#f9faff;color:var(--blue)}
 .external-links a svg{color:var(--blue)}
 
+/* Color accents keep the dashboard lively while preserving scan-friendly surfaces. */
+:root{--blue:#4c63d9;--teal:#079f87;--amber:#d28a22;--coral:#df5d62;--bg:#f6f8fc;--line:#e5e9f2;--shadow:0 16px 40px rgba(37,49,88,.08)}
+body{background:radial-gradient(circle at 8% 0%,#eef3ff 0,transparent 31%),radial-gradient(circle at 92% 4%,#e8fbf5 0,transparent 26%),var(--bg)}
+.topbar{background:rgba(255,255,255,.9);backdrop-filter:blur(16px);border-bottom-color:#dfe5f1}
+.logo{background:linear-gradient(135deg,#e9edff,#d8f7ef);color:var(--blue);box-shadow:0 6px 15px rgba(76,99,217,.12)}
+.topbar nav button.active,.topbar nav button:hover{background:#edf0ff;color:var(--blue)}
+.hero{position:relative;padding:28px 30px;border:1px solid rgba(76,99,217,.12);border-radius:20px;background:linear-gradient(115deg,rgba(255,255,255,.96),rgba(241,244,255,.9) 58%,rgba(231,250,245,.8));box-shadow:var(--shadow);overflow:hidden}
+.hero:after{content:'';position:absolute;width:210px;height:210px;border:28px solid rgba(76,99,217,.08);border-radius:50%;right:8%;top:-120px}
+.hero>div{position:relative;z-index:1}.hero h1 em{color:var(--teal)}.eyebrow{color:var(--teal)}
+.tabs-nav{border-bottom-color:#dce3f0}.tabs-nav button.active{color:var(--blue);background:#edf0ff;border-radius:10px 10px 0 0}.tabs-nav button:hover{color:var(--teal)}
+.analysis-section{border-color:#e0e6f1}.analysis-section h2{color:#263352}.analysis-table thead{background:linear-gradient(90deg,#f0f3ff,#eefaf7)}
+.analysis-table tbody tr:hover{background:#f7f9ff}.analysis-table .category{background:#edf0ff;color:var(--blue)}
+.stock-card{border-color:#e1e6f0;background:rgba(255,255,255,.94);box-shadow:0 5px 18px rgba(37,49,88,.035)}
+.stock-card:hover{border-color:#aeb9f0;box-shadow:0 12px 28px rgba(76,99,217,.15);transform:translateY(-2px)}
+.rank-badge{background:linear-gradient(135deg,var(--blue),#7183ea);box-shadow:0 5px 12px rgba(76,99,217,.2)}
+.indicator{background:#f3f6fc}.indicator:nth-child(2){background:#eefaf7}.indicator:nth-child(3){background:#fff7e9}.indicator strong{color:var(--ink)}
+.view-btn{background:linear-gradient(135deg,var(--blue),#6878e5);box-shadow:0 7px 16px rgba(76,99,217,.18)}
+.pattern-row:hover{background:#f7f9ff}.pattern-type.bullish{background:#e3f8f1;color:var(--teal)}
+.detail-panel{box-shadow:-12px 0 35px rgba(27,39,78,.18)}.panel-header{background:linear-gradient(100deg,#fff,#f1f4ff)}
+.price-section{background:linear-gradient(135deg,#eef1ff,#e8faf5)}.indicator-box:nth-child(odd){background:#f1f4ff}.indicator-box:nth-child(even){background:#eefaf7}
+.detail-chart{margin:0 0 20px;padding:15px;border:1px solid #e1e6f0;border-radius:12px;background:#fbfcff}.detail-chart-header{display:flex;justify-content:space-between;align-items:center;margin-bottom:4px}.detail-chart-header h3{margin:0;font:700 14px Manrope;color:var(--ink)}.detail-chart-header span{font-size:10px;color:var(--muted);font-weight:700}.detail-chart .recharts-responsive-container{min-height:190px}.detail-chart-empty{height:190px;display:grid;place-items:center;color:var(--muted);font-size:12px}
+.support-resistance,.pattern-analysis,.market-structure{background:#f5f7fc}.score-bar .fill{background:linear-gradient(90deg,var(--blue),var(--teal))}
+.positive,.up{color:var(--teal)}.negative,.down{color:var(--coral)}
+
 @media(max-width:1200px){.patterns-section{grid-template-columns:1fr}}
 @media(max-width:768px){
   .detail-panel{width:100%;max-width:100%}
@@ -157,4 +182,13 @@ footer{border-top:1px solid var(--line);background:#fff;padding:20px 5vw;display
   .tabs-nav{gap:4px;font-size:11px}
   .tabs-nav button{padding:8px 12px}
 }
+
+.hero-actions{align-items:center}
+.stock-search{height:42px;display:flex;align-items:center;gap:8px;padding:0 5px 0 12px;border:1px solid #dbe1ef;border-radius:10px;background:rgba(255,255,255,.92);color:var(--blue);box-shadow:0 5px 14px rgba(37,49,88,.05)}
+.stock-search input{width:155px;border:0;outline:0;background:transparent;color:var(--ink);font-size:12px}
+.stock-search input::placeholder{color:#929caf}
+.stock-search button{height:32px;padding:0 11px;border:0;border-radius:7px;background:var(--blue);color:#fff;font-size:11px;font-weight:800}
+.stock-search button:disabled{opacity:.6;cursor:wait}
+.search-error{margin:-12px 0 18px;padding:10px 13px;border:1px solid #ffd6d6;border-radius:9px;background:#fff1f1;color:var(--coral);font-size:12px;font-weight:700}
+@media(max-width:1050px){.hero-actions{width:100%;flex-wrap:wrap}.stock-search{flex:1}.stock-search input{width:100%}}
 

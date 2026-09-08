@@ -390,7 +390,7 @@ export const scoreSetup = (stock) => {
   score += breakdown.riskReward
   
   return {
-    technicalScore: Math.min(Math.max(score, 0), 100),
+    technicalScore: Math.round(Math.min(Math.max(score, 0), 100)),
     breakdown
   }
 }
