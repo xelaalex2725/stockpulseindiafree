@@ -24,6 +24,8 @@ npm install
 npm run dev
 ```
 
+The development command starts both Vite and the market-data proxy. To open the app from another device on the same network, use the host computer's network URL shown by Vite, such as `http://192.168.x.x:5173/`, rather than `localhost`. Keep both the frontend and backend running.
+
 ## Free deployment
 ### Vercel
 1. Push this folder to GitHub.
@@ -31,6 +33,8 @@ npm run dev
 3. Framework: Vite.
 4. Build: `npm run build`
 5. Output: `dist`
+
+The live analysis proxy in `server.js` must be deployed separately and configured with `VITE_API_BASE_URL`. A static Vite deployment alone can display the UI but cannot run the Express proxy.
 
 ### Netlify
 Import the GitHub repo and use:

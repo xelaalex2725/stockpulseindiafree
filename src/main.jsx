@@ -333,7 +333,8 @@ const fetchHistoricalData = async (symbol) => {
     const controller = new AbortController()
     const timeoutId = setTimeout(() => controller.abort(), 10000) // 10 second timeout
     
-    const response = await fetch(`http://localhost:3001/api/chart/${encodeURIComponent(symbol)}?range=1y&interval=1d`, {
+    const apiBaseUrl = import.meta.env.VITE_API_BASE_URL || '/api'
+    const response = await fetch(`${apiBaseUrl}/chart/${encodeURIComponent(symbol)}?range=1y&interval=1d`, {
       signal: controller.signal
     })
     clearTimeout(timeoutId)
