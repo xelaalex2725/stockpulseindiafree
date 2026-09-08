@@ -269,7 +269,7 @@ export const detectChartPattern = (high, low, close, volume) => {
     }
   }
   
-  return patterns.length > 0 ? patterns[0] : null
+  return patterns.find(pattern => pattern.direction === 'Bearish') || patterns[0] || null
 }
 
 export const calculateMarketStructure = (high, low, close) => {

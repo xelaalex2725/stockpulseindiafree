@@ -330,7 +330,7 @@ const STOCK_CONFIG = dedupeBySymbol([
 
 const fetchHistoricalData = async (symbol) => {
   const apiBaseUrl = import.meta.env.VITE_API_BASE_URL || '/api'
-  const requestUrl = `${apiBaseUrl}/chart/${encodeURIComponent(symbol)}?range=1y&interval=1d&events=div`
+  const requestUrl = `${apiBaseUrl}/chart/${encodeURIComponent(symbol)}?range=5y&interval=1d&events=div`
   let lastError
 
   for (let attempt = 1; attempt <= 2; attempt += 1) {
@@ -413,7 +413,11 @@ const analyzeStock = async (stock) => {
   const pattern = detectChartPattern(highs, lows, closes, volumes)
   const structure = calculateMarketStructure(highs, lows, closes)
   
-  const chart = closes.slice(-20).map((val) => ({ value: Number(Number(val).toFixed(2)) }))
+  const chart = closes.map((val, index) => ({
+    name: data.timestamps[index] ? new Date(data.timestamps[index] * 1000).toLocaleDateString('en-IN', { month: 'short', year: 'numeric' }) : '',
+    value: Number(Number(val).toFixed(2))
+  }))
+  const chartPreview = chart.slice(-20)
 
   const latestRsi = Number(rsi[rsi.length - 1] ?? 50)
   const latestMacd = Number(macd[macd.length - 1] ?? 0)
@@ -459,6 +463,7 @@ const analyzeStock = async (stock) => {
     pattern,
     marketStructure: structure,
     chart,
+    chartPreview,
     dividends,
     high52: Math.max(...closes),
     low52: Math.min(...closes),
@@ -498,6 +503,7 @@ function StockAnalysisDashboard() {
   })
   const [tab, setTab] = useState('top30')
   const [menu, setMenu] = useState(false)
+  const [sortConfig, setSortConfig] = useState({ key: 'technicalScore', direction: 'desc' })
 
   const handleStockSearch = async (event) => {
     event.preventDefault()
@@ -594,14 +600,20 @@ function StockAnalysisDashboard() {
     return () => clearInterval(interval)
   }, [])
   
-  const largeCaps = useMemo(() => stocks.filter(s => s.c === 'Large Cap').slice(0, 100), [stocks])
-  const midCaps = useMemo(() => stocks.filter(s => s.c === 'Mid Cap').slice(0, 100), [stocks])
-  const smallCaps = useMemo(() => stocks.filter(s => s.c === 'Small Cap').slice(0, 100), [stocks])
-  const top5 = useMemo(() => stocks.slice(0, 30), [stocks])
-  
-  const bullishPatterns = useMemo(() => stocks.filter(s => s.pattern?.direction === 'Bullish' && s.technicalScore > 70), [stocks])
-  const bearishPatterns = useMemo(() => stocks.filter(s => s.pattern?.direction === 'Bearish' && s.technicalScore > 70), [stocks])
-  const watchlistStocks = useMemo(() => stocks.filter(stock => watchlistSymbols.includes(stock.symbol)), [stocks, watchlistSymbols])
+  const sortStocks = (items) => [...items].sort((a, b) => {
+    const valueA = sortConfig.key === 'name' ? a.n || a.s : sortConfig.key === 'volume' ? a.volumeAnalysis?.rvol || 0 : a[sortConfig.key] || 0
+    const valueB = sortConfig.key === 'name' ? b.n || b.s : sortConfig.key === 'volume' ? b.volumeAnalysis?.rvol || 0 : b[sortConfig.key] || 0
+    const result = typeof valueA === 'string' ? valueA.localeCompare(valueB) : valueA - valueB
+    return sortConfig.direction === 'asc' ? result : -result
+  })
+
+  const largeCaps = useMemo(() => sortStocks(stocks.filter(s => s.c === 'Large Cap')).slice(0, 100), [stocks, sortConfig])
+  const midCaps = useMemo(() => sortStocks(stocks.filter(s => s.c === 'Mid Cap')).slice(0, 100), [stocks, sortConfig])
+  const smallCaps = useMemo(() => sortStocks(stocks.filter(s => s.c === 'Small Cap')).slice(0, 100), [stocks, sortConfig])
+  const top100 = useMemo(() => sortStocks(stocks).slice(0, 100), [stocks, sortConfig])
+  const bullishPatterns = useMemo(() => sortStocks(stocks.filter(s => s.pattern?.direction === 'Bullish')), [stocks, sortConfig])
+  const bearishPatterns = useMemo(() => sortStocks(stocks.filter(s => s.pattern?.direction === 'Bearish')), [stocks, sortConfig])
+  const watchlistStocks = useMemo(() => sortStocks(stocks.filter(stock => watchlistSymbols.includes(stock.symbol))), [stocks, watchlistSymbols, sortConfig])
 
   const toggleWatchlist = (stock) => {
     setWatchlistSymbols(current => {
@@ -632,7 +644,7 @@ function StockAnalysisDashboard() {
           <div><b>Stock Pulse</b><span>AI ANALYSIS</span></div>
         </div>
         <nav className={menu ? 'open' : ''}>
-          {['Dashboard', 'Top 30', 'Analysis', 'Patterns', 'News', 'Dividends', 'Watchlist'].map((x, i) => (
+          {['Dashboard', 'Top 100', 'Analysis', 'Patterns', 'News', 'Dividends', 'Watchlist'].map((x, i) => (
             <button
               key={x}
               className={x === activeNav ? 'active' : ''}
@@ -656,7 +668,7 @@ function StockAnalysisDashboard() {
           <div>
             <div className="eyebrow"><span className="live-dot" /> REAL-TIME TECHNICAL ANALYSIS</div>
             <h1>Indian Stock Market <em>AI Engine</em></h1>
-            <p>Advanced technical analysis with chart patterns, indicators, market regime detection, and risk/reward scoring for 30 top stocks across Large, Mid, and Small Cap categories.</p>
+            <p>Advanced technical analysis with chart patterns, indicators, market regime detection, and risk/reward scoring for 100 top stocks across Large, Mid, and Small Cap categories.</p>
           </div>
           <div className="hero-actions">
             <form className="stock-search" onSubmit={handleStockSearch}>
@@ -681,7 +693,7 @@ function StockAnalysisDashboard() {
 
         <section className="tabs-nav">
           <button className={tab === 'top30' ? 'active' : ''} onClick={() => setTab('top30')}>
-            🏆 Top 30 Opportunities
+            🏆 Top 100 Opportunities
           </button>
           <button className={tab === 'largecap' ? 'active' : ''} onClick={() => setTab('largecap')}>
             🥇 Large Cap ({largeCaps.length})
@@ -703,6 +715,10 @@ function StockAnalysisDashboard() {
           </button>
         </section>
 
+        {tab !== 'dividends' && (
+          <StockSortControls sortConfig={sortConfig} onChange={setSortConfig} />
+        )}
+
         {loading && stocks.length === 0 ? (
           <div className="loading">
             <Sparkles className="spin" size={32} />
@@ -715,7 +731,7 @@ function StockAnalysisDashboard() {
           <>
             {tab === 'top30' && (
               <section className="card analysis-section">
-                <h2>🏆 TOP 30 RANKED STOCKS</h2>
+                <h2>🏆 TOP 100 RANKED STOCKS</h2>
                 <div className="table-wrapper">
                   <table className="analysis-table">
                     <thead>
@@ -734,7 +750,7 @@ function StockAnalysisDashboard() {
                       </tr>
                     </thead>
                     <tbody>
-                      {stocks.map((stock, idx) => (
+                      {top100.map((stock, idx) => (
                         <tr key={stock.s} onClick={() => setSelectedStock(stock)}>
                           <td className="rank">{idx + 1}</td>
                           <td className="stock-name">
@@ -746,9 +762,9 @@ function StockAnalysisDashboard() {
                             </div>
                           </td>
                           <td className="screener-chart-cell">
-                            {stock.chart?.length > 1 ? (
+                            {stock.chartPreview?.length > 1 ? (
                               <ResponsiveContainer width="100%" height={46}>
-                                <RechartsLine data={stock.chart}>
+                                <RechartsLine data={stock.chartPreview}>
                                   <Line
                                     type="monotone"
                                     dataKey="value"
@@ -949,6 +965,29 @@ function StockGrid({ stocks, onSelect, watchlistSymbols, onToggleWatchlist }) {
   )
 }
 
+function StockSortControls({ sortConfig, onChange }) {
+  const sortOptions = [
+    { value: 'technicalScore', label: 'Technical Score' },
+    { value: 'change', label: 'Daily Change' },
+    { value: 'currentPrice', label: 'Price' },
+    { value: 'rsi', label: 'RSI' },
+    { value: 'volume', label: 'Volume' },
+    { value: 'name', label: 'Company Name' }
+  ]
+
+  return (
+    <div className="stock-sort-controls">
+      <span>Sort stocks by</span>
+      <select value={sortConfig.key} onChange={event => onChange({ ...sortConfig, key: event.target.value })} aria-label="Sort stocks by">
+        {sortOptions.map(option => <option key={option.value} value={option.value}>{option.label}</option>)}
+      </select>
+      <button onClick={() => onChange({ ...sortConfig, direction: sortConfig.direction === 'asc' ? 'desc' : 'asc' })}>
+        {sortConfig.direction === 'asc' ? '↑ Ascending' : '↓ Descending'}
+      </button>
+    </div>
+  )
+}
+
 function DividendCalendar({ dividends, loading, error }) {
   const [sortConfig, setSortConfig] = useState({ key: 'exDate', direction: 'asc' })
 
@@ -1098,7 +1137,7 @@ function StockDetailPanel({ stock, onClose, isWatched, onToggleWatchlist }) {
         <div className="detail-chart">
           <div className="detail-chart-header">
             <h3>Recent Price Trend</h3>
-            <span>20 sessions</span>
+            <span>5 years · daily</span>
           </div>
           {stock.chart?.length > 1 ? (
             <ResponsiveContainer width="100%" height={190}>
