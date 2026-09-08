@@ -329,50 +329,59 @@ const STOCK_CONFIG = dedupeBySymbol([
 ])
 
 const fetchHistoricalData = async (symbol) => {
-  try {
-    const controller = new AbortController()
-    const timeoutId = setTimeout(() => controller.abort(), 10000) // 10 second timeout
+  const apiBaseUrl = import.meta.env.VITE_API_BASE_URL || '/api'
+  const requestUrl = `${apiBaseUrl}/chart/${encodeURIComponent(symbol)}?range=1y&interval=1d`
+  let lastError
+
+  for (let attempt = 1; attempt <= 2; attempt += 1) {
+    try {
+      const controller = new AbortController()
+      const timeoutId = setTimeout(() => controller.abort(), 10000)
+      const response = await fetch(requestUrl, { signal: controller.signal })
+      clearTimeout(timeoutId)
+
+      if (!response.ok) {
+        const details = await response.text().catch(() => '')
+        throw new Error(`Chart API returned ${response.status}${details ? `: ${details.slice(0, 120)}` : ''}`)
+      }
+
+      const json = await response.json()
+      const result = json?.chart?.result?.[0]
+      if (!result) return null
     
-    const apiBaseUrl = import.meta.env.VITE_API_BASE_URL || '/api'
-    const response = await fetch(`${apiBaseUrl}/chart/${encodeURIComponent(symbol)}?range=1y&interval=1d`, {
-      signal: controller.signal
-    })
-    clearTimeout(timeoutId)
-    
-    if (!response.ok) throw new Error('Failed to fetch')
-    const json = await response.json()
-    const result = json?.chart?.result?.[0]
-    if (!result) return null
-    
-    const timestamps = result.timestamp || []
-    const quote = result.indicators?.quote?.[0] || {}
-    const opens = quote.open || []
-    const highs = quote.high || []
-    const lows = quote.low || []
-    const closes = quote.close || []
-    const volumes = quote.volume || []
+      const timestamps = result.timestamp || []
+      const quote = result.indicators?.quote?.[0] || {}
+      const opens = quote.open || []
+      const highs = quote.high || []
+      const lows = quote.low || []
+      const closes = quote.close || []
+      const volumes = quote.volume || []
 
-    const validIndexes = closes
-      .map((value, index) => (Number.isFinite(Number(value)) ? index : null))
-      .filter(index => index !== null)
+      const validIndexes = closes
+        .map((value, index) => (Number.isFinite(Number(value)) ? index : null))
+        .filter(index => index !== null)
 
-    if (validIndexes.length < 30) return null
+      if (validIndexes.length < 30) return null
 
-    const safeSlice = (arr) => validIndexes.map(index => Number(arr[index])).filter(value => Number.isFinite(value))
+      const safeSlice = (arr) => validIndexes.map(index => Number(arr[index])).filter(value => Number.isFinite(value))
 
-    return {
-      timestamps: safeSlice(timestamps),
-      opens: safeSlice(opens),
-      highs: safeSlice(highs),
-      lows: safeSlice(lows),
-      closes: safeSlice(closes),
-      volumes: safeSlice(volumes),
-      meta: result.meta
+      return {
+        timestamps: safeSlice(timestamps),
+        opens: safeSlice(opens),
+        highs: safeSlice(highs),
+        lows: safeSlice(lows),
+        closes: safeSlice(closes),
+        volumes: safeSlice(volumes),
+        meta: result.meta
+      }
+    } catch (error) {
+      lastError = error
+      if (attempt < 2) continue
     }
-  } catch (error) {
-    console.warn(`Failed to fetch ${symbol}:`, error)
-    return null
   }
+
+  console.warn(`Failed to fetch ${symbol}:`, lastError)
+  return null
 }
 
 const analyzeStock = async (stock) => {

@@ -34,7 +34,9 @@ The development command starts both Vite and the market-data proxy. To open the 
 4. Build: `npm run build`
 5. Output: `dist`
 
-The live analysis proxy in `server.js` must be deployed separately and configured with `VITE_API_BASE_URL`. A static Vite deployment alone can display the UI but cannot run the Express proxy.
+This repository includes a Vercel serverless function at `api/chart/[symbol].js`, so the live chart API is served from the same Vercel domain. No `VITE_API_BASE_URL` value is required for the standard deployment.
+
+After deployment, use the Vercel-provided URL or connect a custom domain from **Vercel > Project Settings > Domains**. The local `server.js` remains available for local development.
 
 ### Netlify
 Import the GitHub repo and use:
