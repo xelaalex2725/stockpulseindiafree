@@ -489,6 +489,13 @@ function StockAnalysisDashboard() {
   const [nseDividends, setNseDividends] = useState([])
   const [dividendLoading, setDividendLoading] = useState(false)
   const [dividendError, setDividendError] = useState('')
+  const [watchlistSymbols, setWatchlistSymbols] = useState(() => {
+    try {
+      return JSON.parse(localStorage.getItem('stock-pulse-watchlist') || '[]')
+    } catch {
+      return []
+    }
+  })
   const [tab, setTab] = useState('top30')
   const [menu, setMenu] = useState(false)
 
@@ -524,6 +531,7 @@ function StockAnalysisDashboard() {
       return
     }
 
+    setStocks(current => current.some(stockItem => stockItem.symbol === result.symbol) ? current : [result, ...current])
     setSelectedStock(result)
   }
   
@@ -593,17 +601,28 @@ function StockAnalysisDashboard() {
   
   const bullishPatterns = useMemo(() => stocks.filter(s => s.pattern?.direction === 'Bullish' && s.technicalScore > 70), [stocks])
   const bearishPatterns = useMemo(() => stocks.filter(s => s.pattern?.direction === 'Bearish' && s.technicalScore > 70), [stocks])
+  const watchlistStocks = useMemo(() => stocks.filter(stock => watchlistSymbols.includes(stock.symbol)), [stocks, watchlistSymbols])
+
+  const toggleWatchlist = (stock) => {
+    setWatchlistSymbols(current => {
+      const next = current.includes(stock.symbol)
+        ? current.filter(symbol => symbol !== stock.symbol)
+        : [...current, stock.symbol]
+      localStorage.setItem('stock-pulse-watchlist', JSON.stringify(next))
+      return next
+    })
+  }
 
   const handleNavClick = (label) => {
     if (label === 'News') {
       window.open('https://www.moneycontrol.com/news/business/markets/', '_blank', 'noopener,noreferrer')
       return
     }
-    setTab(label === 'Patterns' ? 'patterns' : label === 'Dividends' ? 'dividends' : 'top30')
+    setTab(label === 'Patterns' ? 'patterns' : label === 'Dividends' ? 'dividends' : label === 'Watchlist' ? 'watchlist' : 'top30')
     setMenu(false)
   }
 
-  const activeNav = tab === 'patterns' ? 'Patterns' : tab === 'dividends' ? 'Dividends' : 'Analysis'
+  const activeNav = tab === 'patterns' ? 'Patterns' : tab === 'dividends' ? 'Dividends' : tab === 'watchlist' ? 'Watchlist' : 'Analysis'
   
   return (
     <div className="app">
@@ -613,7 +632,7 @@ function StockAnalysisDashboard() {
           <div><b>Stock Pulse</b><span>AI ANALYSIS</span></div>
         </div>
         <nav className={menu ? 'open' : ''}>
-          {['Dashboard', 'Top 30', 'Analysis', 'Patterns', 'News', 'Dividends'].map((x, i) => (
+          {['Dashboard', 'Top 30', 'Analysis', 'Patterns', 'News', 'Dividends', 'Watchlist'].map((x, i) => (
             <button
               key={x}
               className={x === activeNav ? 'active' : ''}
@@ -678,6 +697,9 @@ function StockAnalysisDashboard() {
           </button>
           <button className={tab === 'dividends' ? 'active' : ''} onClick={() => setTab('dividends')}>
             💰 Dividends ({nseDividends.length})
+          </button>
+          <button className={tab === 'watchlist' ? 'active' : ''} onClick={() => setTab('watchlist')}>
+            ⭐ Watchlist ({watchlistStocks.length})
           </button>
         </section>
 
@@ -774,7 +796,10 @@ function StockAnalysisDashboard() {
                           <td className="score">
                             <strong className="score-value">{stock.technicalScore || 0}</strong>
                           </td>
-                          <td>
+                          <td className="row-actions-cell">
+                            <button className="watch-btn" title={watchlistSymbols.includes(stock.symbol) ? 'Remove from watchlist' : 'Add to watchlist'} onClick={event => { event.stopPropagation(); toggleWatchlist(stock) }}>
+                              <Star size={14} fill={watchlistSymbols.includes(stock.symbol) ? 'currentColor' : 'none'} />
+                            </button>
                             <button className="detail-btn" onClick={() => setSelectedStock(stock)}>
                               View
                             </button>
@@ -790,21 +815,38 @@ function StockAnalysisDashboard() {
             {tab === 'largecap' && (
               <section className="card analysis-section">
                 <h2>🥇 TOP {largeCaps.length} LARGE CAP STOCKS</h2>
-                <StockGrid stocks={largeCaps} onSelect={setSelectedStock} />
+                <StockGrid stocks={largeCaps} onSelect={setSelectedStock} watchlistSymbols={watchlistSymbols} onToggleWatchlist={toggleWatchlist} />
               </section>
             )}
 
             {tab === 'midcap' && (
               <section className="card analysis-section">
                 <h2>🚀 TOP {midCaps.length} MID CAP STOCKS</h2>
-                <StockGrid stocks={midCaps} onSelect={setSelectedStock} />
+                <StockGrid stocks={midCaps} onSelect={setSelectedStock} watchlistSymbols={watchlistSymbols} onToggleWatchlist={toggleWatchlist} />
               </section>
             )}
 
             {tab === 'smallcap' && (
               <section className="card analysis-section">
                 <h2>⚡ TOP {smallCaps.length} SMALL CAP STOCKS</h2>
-                <StockGrid stocks={smallCaps} onSelect={setSelectedStock} />
+                <StockGrid stocks={smallCaps} onSelect={setSelectedStock} watchlistSymbols={watchlistSymbols} onToggleWatchlist={toggleWatchlist} />
+              </section>
+            )}
+
+            {tab === 'watchlist' && (
+              <section className="card analysis-section">
+                <div className="dividend-heading">
+                  <div>
+                    <h2>⭐ YOUR WATCHLIST</h2>
+                    <p>Stocks saved in this browser profile for further analysis.</p>
+                  </div>
+                  <span className="dividend-count">{watchlistStocks.length} stocks</span>
+                </div>
+                {watchlistStocks.length === 0 ? (
+                  <div className="no-results">No stocks saved yet. Use Add to Watchlist on any stock.</div>
+                ) : (
+                  <StockGrid stocks={watchlistStocks} onSelect={setSelectedStock} watchlistSymbols={watchlistSymbols} onToggleWatchlist={toggleWatchlist} />
+                )}
               </section>
             )}
 
@@ -812,11 +854,11 @@ function StockAnalysisDashboard() {
               <section className="patterns-section">
                 <div className="card">
                   <h2>📈 BULLISH PATTERNS ({bullishPatterns.length})</h2>
-                  <PatternGrid patterns={bullishPatterns} onSelect={setSelectedStock} />
+                  <PatternGrid patterns={bullishPatterns} onSelect={setSelectedStock} watchlistSymbols={watchlistSymbols} onToggleWatchlist={toggleWatchlist} />
                 </div>
                 <div className="card">
                   <h2>📉 BEARISH PATTERNS ({bearishPatterns.length})</h2>
-                  <PatternGrid patterns={bearishPatterns} onSelect={setSelectedStock} />
+                  <PatternGrid patterns={bearishPatterns} onSelect={setSelectedStock} watchlistSymbols={watchlistSymbols} onToggleWatchlist={toggleWatchlist} />
                 </div>
               </section>
             )}
@@ -825,7 +867,7 @@ function StockAnalysisDashboard() {
               <DividendCalendar dividends={nseDividends} loading={dividendLoading} error={dividendError} />
             )}
 
-            {selectedStock && <StockDetailPanel stock={selectedStock} onClose={() => setSelectedStock(null)} />}
+            {selectedStock && <StockDetailPanel stock={selectedStock} onClose={() => setSelectedStock(null)} isWatched={watchlistSymbols.includes(selectedStock.symbol)} onToggleWatchlist={toggleWatchlist} />}
           </>
         )}
       </main>
@@ -839,12 +881,15 @@ function StockAnalysisDashboard() {
   )
 }
 
-function StockGrid({ stocks, onSelect }) {
+function StockGrid({ stocks, onSelect, watchlistSymbols, onToggleWatchlist }) {
   return (
     <div className="stock-grid">
       {stocks.map((stock, idx) => (
         <div key={stock.s} className="stock-card" onClick={() => onSelect(stock)}>
           <div className="rank-badge">#{idx + 1}</div>
+          <button className="card-watch-btn" title={watchlistSymbols.includes(stock.symbol) ? 'Remove from watchlist' : 'Add to watchlist'} onClick={event => { event.stopPropagation(); onToggleWatchlist(stock) }}>
+            <Star size={16} fill={watchlistSymbols.includes(stock.symbol) ? 'currentColor' : 'none'} />
+          </button>
           <div className="stock-header">
             <div>
               <h3>{stock.s}</h3>
@@ -905,6 +950,35 @@ function StockGrid({ stocks, onSelect }) {
 }
 
 function DividendCalendar({ dividends, loading, error }) {
+  const [sortConfig, setSortConfig] = useState({ key: 'exDate', direction: 'asc' })
+
+  const sortedDividends = useMemo(() => {
+    const valueFor = (dividend, key) => {
+      if (key === 'exDate' || key === 'recordDate' || key === 'publishedAt') {
+        const parsed = Date.parse(dividend[key] || '')
+        return Number.isNaN(parsed) ? 0 : parsed
+      }
+      return String(dividend[key] || '').toLowerCase()
+    }
+
+    return [...dividends].sort((a, b) => {
+      const first = valueFor(a, sortConfig.key)
+      const second = valueFor(b, sortConfig.key)
+      if (first === second) return 0
+      const result = first > second ? 1 : -1
+      return sortConfig.direction === 'asc' ? result : -result
+    })
+  }, [dividends, sortConfig])
+
+  const requestSort = (key) => {
+    setSortConfig(current => ({
+      key,
+      direction: current.key === key && current.direction === 'asc' ? 'desc' : 'asc'
+    }))
+  }
+
+  const sortIndicator = (key) => sortConfig.key === key ? (sortConfig.direction === 'asc' ? '↑' : '↓') : '↕'
+
   return (
     <section className="card analysis-section dividend-section">
       <div className="dividend-heading">
@@ -925,17 +999,17 @@ function DividendCalendar({ dividends, loading, error }) {
           <table className="analysis-table dividend-table">
             <thead>
               <tr>
-                <th>Company</th>
-                <th>Purpose</th>
-                <th>Ex-Date</th>
-                <th>Record Date</th>
-                <th>Face Value</th>
-                <th>Published</th>
+                <th><button className="sort-header" onClick={() => requestSort('company')}>Company <span>{sortIndicator('company')}</span></button></th>
+                <th><button className="sort-header" onClick={() => requestSort('purpose')}>Purpose <span>{sortIndicator('purpose')}</span></button></th>
+                <th><button className="sort-header" onClick={() => requestSort('exDate')}>Ex-Date <span>{sortIndicator('exDate')}</span></button></th>
+                <th><button className="sort-header" onClick={() => requestSort('recordDate')}>Record Date <span>{sortIndicator('recordDate')}</span></button></th>
+                <th><button className="sort-header" onClick={() => requestSort('faceValue')}>Face Value <span>{sortIndicator('faceValue')}</span></button></th>
+                <th><button className="sort-header" onClick={() => requestSort('publishedAt')}>Published <span>{sortIndicator('publishedAt')}</span></button></th>
                 <th>Source</th>
               </tr>
             </thead>
             <tbody>
-              {dividends.map((dividend, index) => (
+              {sortedDividends.map((dividend, index) => (
                 <tr key={`${dividend.company}-${dividend.exDate}-${index}`}>
                   <td className="stock-name">
                     <strong>{dividend.company}</strong>
@@ -957,7 +1031,7 @@ function DividendCalendar({ dividends, loading, error }) {
   )
 }
 
-function PatternGrid({ patterns, onSelect }) {
+function PatternGrid({ patterns, onSelect, watchlistSymbols, onToggleWatchlist }) {
   return (
     <div className="patterns-grid">
       {patterns.length === 0 ? (
@@ -965,6 +1039,9 @@ function PatternGrid({ patterns, onSelect }) {
       ) : (
         patterns.map(stock => (
           <div key={stock.s} className="pattern-row" onClick={() => onSelect(stock)}>
+            <button className="pattern-watch-btn" title={watchlistSymbols.includes(stock.symbol) ? 'Remove from watchlist' : 'Add to watchlist'} onClick={event => { event.stopPropagation(); onToggleWatchlist(stock) }}>
+              <Star size={15} fill={watchlistSymbols.includes(stock.symbol) ? 'currentColor' : 'none'} />
+            </button>
             <div className="pattern-stock">
               <strong>{stock.s}</strong>
               <span>{stock.n}</span>
@@ -990,7 +1067,7 @@ function PatternGrid({ patterns, onSelect }) {
   )
 }
 
-function StockDetailPanel({ stock, onClose }) {
+function StockDetailPanel({ stock, onClose, isWatched, onToggleWatchlist }) {
   return (
     <div className="detail-panel">
       <div className="panel-header">
@@ -998,7 +1075,13 @@ function StockDetailPanel({ stock, onClose }) {
           <h2>{stock.s} - {stock.n}</h2>
           <p>{stock.c} | {stock.sector}</p>
         </div>
-        <button onClick={onClose} className="close-btn"><X size={24} /></button>
+        <div className="panel-actions">
+          <button className="panel-watch-btn" onClick={() => onToggleWatchlist(stock)}>
+            <Star size={16} fill={isWatched ? 'currentColor' : 'none'} />
+            {isWatched ? 'Watching' : 'Add to Watchlist'}
+          </button>
+          <button onClick={onClose} className="close-btn"><X size={24} /></button>
+        </div>
       </div>
 
       <div className="panel-content">
