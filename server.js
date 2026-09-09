@@ -38,6 +38,20 @@ const parseNseDividends = (xml) => [...xml.matchAll(/<item>([\s\S]*?)<\/item>/gi
   })
   .filter(dividend => /dividend/i.test(dividend.purpose))
 
+const parseNewsRss = (xml, source) => [...xml.matchAll(/<item>([\s\S]*?)<\/item>/gi)]
+  .map(match => {
+    const item = match[1]
+    const read = (tag) => decodeXml(item.match(new RegExp(`<${tag}[^>]*>([\\s\\S]*?)<\\/${tag}>`, 'i'))?.[1] || '')
+    return {
+      title: read('title'),
+      description: read('description').replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim(),
+      link: read('link'),
+      publishedAt: read('pubDate'),
+      source
+    }
+  })
+  .filter(article => article.title && article.link)
+
 app.get('/api/dividends', async (req, res) => {
   try {
     const response = await fetch('https://nsearchives.nseindia.com/content/RSS/Corporate_action.xml', {
@@ -50,6 +64,29 @@ app.get('/api/dividends', async (req, res) => {
   } catch (error) {
     console.error('Error fetching NSE dividends:', error.message)
     res.status(502).json({ error: 'Unable to reach NSE corporate actions feed' })
+  }
+})
+
+app.get('/api/news', async (req, res) => {
+  const feeds = [
+    { url: 'https://www.moneycontrol.com/rss/marketreports.xml', source: 'Moneycontrol' },
+    { url: 'https://news.google.com/rss/search?q=Indian+stock+market+when%3A1d&hl=en-IN&gl=IN&ceid=IN%3Aen', source: 'Google News' }
+  ]
+
+  try {
+    const articles = []
+    for (const feed of feeds) {
+      const response = await fetch(feed.url, { headers: { 'User-Agent': 'Mozilla/5.0 Stock Pulse India', Accept: 'application/rss+xml, application/xml, text/xml' } })
+      if (response.ok) articles.push(...parseNewsRss(await response.text(), feed.source))
+    }
+    const uniqueArticles = [...new Map(articles.map(article => [article.link, article])).values()]
+      .sort((first, second) => new Date(second.publishedAt || 0) - new Date(first.publishedAt || 0))
+      .slice(0, 100)
+    res.set('Cache-Control', 'public, max-age=300')
+    res.json({ updatedAt: new Date().toISOString(), articles: uniqueArticles })
+  } catch (error) {
+    console.error('Error fetching market news:', error.message)
+    res.status(502).json({ error: 'Unable to reach market news feeds' })
   }
 })
 

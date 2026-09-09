@@ -2,10 +2,11 @@ import React, { useEffect, useMemo, useState } from 'react'
 import { createRoot } from 'react-dom/client'
 import {
   BarChart3, Bell, BookOpen, ExternalLink, Gauge, Globe2, Layers3, LineChart,
-  Menu, Newspaper, RefreshCw, Search, ShieldCheck, Sparkles, Star, TrendingDown, TrendingUp, X,
-  AlertCircle, CheckCircle, Zap, Activity
+  Menu, Newspaper, RefreshCw, Search, ShieldCheck, Sparkles, Star, TrendingDown, TrendingUp, X, Download,
+  AlertCircle, CheckCircle, Zap, Activity, Send, Bot
 } from 'lucide-react'
 import { ResponsiveContainer, AreaChart, Area, BarChart, Bar, XAxis, YAxis, Tooltip, Legend, LineChart as RechartsLine, Line } from 'recharts'
+import * as XLSX from 'xlsx'
 import { calculateEMA, calculateRSI, calculateMACD, calculateADX, calculateVWAP, detectChartPattern, calculateMarketStructure, calculateSuportResistance, calculateVolumAnalysis, scoreSetup } from './technicalAnalysis'
 import './styles.css'
 
@@ -328,9 +329,25 @@ const STOCK_CONFIG = dedupeBySymbol([
   ...SMALL_CAP_STOCKS.map(stock => ({ ...stock, c: 'Small Cap' }))
 ])
 
-const fetchHistoricalData = async (symbol) => {
+const BROKER_PROFILES = [
+  { name: 'Axis Securities', style: 'Momentum desk', horizon: '1-3 weeks', bias: 1.05 },
+  { name: 'Motilal Oswal', style: 'Swing desk', horizon: '2-6 weeks', bias: 1.1 },
+  { name: 'ICICI Securities', style: 'Trend desk', horizon: '1-3 months', bias: 1 },
+  { name: 'HDFC Securities', style: 'Risk-managed desk', horizon: '2-4 weeks', bias: 0.95 },
+  { name: 'Kotak Securities', style: 'Technical desk', horizon: '1-2 months', bias: 1.08 },
+  { name: 'Sharekhan', style: 'Positional desk', horizon: '1-3 months', bias: 0.98 }
+]
+
+const CHART_TIMEFRAMES = {
+  day: { label: 'Day', range: '1d', interval: '5m', detail: 'today - 5 min' },
+  week: { label: 'Week', range: '5d', interval: '15m', detail: '5 days - 15 min' },
+  month: { label: 'Month', range: '1mo', interval: '1d', detail: '1 month - daily' },
+  year: { label: 'Year', range: '1y', interval: '1d', detail: '1 year - daily' }
+}
+
+const fetchHistoricalData = async (symbol, range = '5y', interval = '1d') => {
   const apiBaseUrl = import.meta.env.VITE_API_BASE_URL || '/api'
-  const requestUrl = `${apiBaseUrl}/chart/${encodeURIComponent(symbol)}?range=5y&interval=1d&events=div`
+  const requestUrl = `${apiBaseUrl}/chart/${encodeURIComponent(symbol)}?range=${range}&interval=${interval}&events=div`
   let lastError
 
   for (let attempt = 1; attempt <= 2; attempt += 1) {
@@ -361,7 +378,7 @@ const fetchHistoricalData = async (symbol) => {
         .map((value, index) => (Number.isFinite(Number(value)) ? index : null))
         .filter(index => index !== null)
 
-      if (validIndexes.length < 30) return null
+      if (validIndexes.length < 2) return null
 
       const safeSlice = (arr) => validIndexes.map(index => Number(arr[index])).filter(value => Number.isFinite(value))
 
@@ -494,6 +511,9 @@ function StockAnalysisDashboard() {
   const [nseDividends, setNseDividends] = useState([])
   const [dividendLoading, setDividendLoading] = useState(false)
   const [dividendError, setDividendError] = useState('')
+  const [newsArticles, setNewsArticles] = useState([])
+  const [newsLoading, setNewsLoading] = useState(false)
+  const [newsError, setNewsError] = useState('')
   const [watchlistSymbols, setWatchlistSymbols] = useState(() => {
     try {
       return JSON.parse(localStorage.getItem('stock-pulse-watchlist') || '[]')
@@ -503,7 +523,7 @@ function StockAnalysisDashboard() {
   })
   const [tab, setTab] = useState('top30')
   const [menu, setMenu] = useState(false)
-  const [sortConfig, setSortConfig] = useState({ key: 'technicalScore', direction: 'desc' })
+  const [sortConfig, setSortConfig] = useState({ key: 'change', direction: 'desc' })
 
   const handleStockSearch = async (event) => {
     event.preventDefault()
@@ -578,6 +598,29 @@ function StockAnalysisDashboard() {
   }, [])
 
   useEffect(() => {
+    const loadNews = async () => {
+      setNewsLoading(true)
+      try {
+        const apiBaseUrl = import.meta.env.VITE_API_BASE_URL || '/api'
+        const response = await fetch(`${apiBaseUrl}/news`)
+        if (!response.ok) throw new Error(`Market news feed returned ${response.status}`)
+        const data = await response.json()
+        setNewsArticles(data.articles || [])
+        setNewsError('')
+      } catch (error) {
+        console.warn('Failed to fetch market news:', error)
+        setNewsError("News feed is temporarily unavailable. Showing today's market movers instead.")
+      } finally {
+        setNewsLoading(false)
+      }
+    }
+
+    loadNews()
+    const interval = setInterval(loadNews, 300000)
+    return () => clearInterval(interval)
+  }, [])
+
+  useEffect(() => {
     const loadNseDividends = async () => {
       setDividendLoading(true)
       try {
@@ -611,9 +654,46 @@ function StockAnalysisDashboard() {
   const midCaps = useMemo(() => sortStocks(stocks.filter(s => s.c === 'Mid Cap')).slice(0, 100), [stocks, sortConfig])
   const smallCaps = useMemo(() => sortStocks(stocks.filter(s => s.c === 'Small Cap')).slice(0, 100), [stocks, sortConfig])
   const top100 = useMemo(() => sortStocks(stocks).slice(0, 100), [stocks, sortConfig])
-  const bullishPatterns = useMemo(() => sortStocks(stocks.filter(s => s.pattern?.direction === 'Bullish')), [stocks, sortConfig])
-  const bearishPatterns = useMemo(() => sortStocks(stocks.filter(s => s.pattern?.direction === 'Bearish')), [stocks, sortConfig])
+  const sortPatterns = (items) => [...items].sort((first, second) => {
+    const confidenceDifference = (second.pattern?.confidence || 0) - (first.pattern?.confidence || 0)
+    return confidenceDifference || (second.technicalScore || 0) - (first.technicalScore || 0)
+  })
+  const bullishPatterns = useMemo(() => sortPatterns(stocks.filter(s => s.pattern?.direction === 'Bullish')), [stocks])
+  const bearishPatterns = useMemo(() => sortPatterns(stocks.filter(s => s.pattern?.direction === 'Bearish')), [stocks])
   const watchlistStocks = useMemo(() => sortStocks(stocks.filter(stock => watchlistSymbols.includes(stock.symbol))), [stocks, watchlistSymbols, sortConfig])
+  const newsMovers = useMemo(() => {
+    const ranked = stocks.map(stock => {
+    const keywords = [stock.s, stock.n, stock.symbol.replace(/\.(NS|BO)$/, '')].map(value => value.toLowerCase())
+    const matches = newsArticles.filter(article => keywords.some(keyword => keyword.length > 2 && `${article.title} ${article.description}`.toLowerCase().includes(keyword)))
+    return { stock, articles: matches }
+    }).sort((first, second) => (second.stock.change || 0) - (first.stock.change || 0) || second.articles.length - first.articles.length)
+    const positiveMovers = ranked.filter(item => item.stock.change > 0)
+    return (positiveMovers.length >= 50 ? positiveMovers : ranked).slice(0, 50)
+  }, [stocks, newsArticles])
+  const brokerCalls = useMemo(() => stocks
+    .slice()
+    .sort((first, second) => (second.technicalScore || 0) - (first.technicalScore || 0) || (second.change || 0) - (first.change || 0))
+    .slice(0, 50)
+    .map((stock, index) => {
+      const broker = BROKER_PROFILES[index % BROKER_PROFILES.length]
+      const score = stock.technicalScore || 0
+      const bullish = score >= 60 || (score >= 48 && (stock.change || 0) > 0)
+      const bearish = score < 40 && (stock.change || 0) < 0
+      const call = bullish ? 'BUY' : bearish ? 'SELL' : 'HOLD'
+      const target = bullish ? stock.swingTarget : bearish ? stock.swingStopLoss : stock.currentPrice
+      const stopLoss = bullish ? stock.swingStopLoss : bearish ? stock.swingTarget : stock.support
+      const upside = stock.currentPrice ? ((target - stock.currentPrice) / stock.currentPrice) * 100 : 0
+      return {
+        stock,
+        broker,
+        call,
+        target: Number(target || stock.currentPrice || 0),
+        stopLoss: Number(stopLoss || stock.currentPrice || 0),
+        upside,
+        confidence: Math.min(95, Math.max(52, Math.round((score * broker.bias) || 52))),
+        rationale: call === 'BUY' ? `${stock.pattern?.type || 'Positive trend'} with ${stock.marketStructure?.trend || 'supportive structure'}` : call === 'SELL' ? `Weak momentum with ${stock.marketStructure?.trend || 'downside risk'}` : 'Mixed momentum; wait for confirmation'
+      }
+    }), [stocks])
 
   const toggleWatchlist = (stock) => {
     setWatchlistSymbols(current => {
@@ -626,16 +706,72 @@ function StockAnalysisDashboard() {
   }
 
   const handleNavClick = (label) => {
-    if (label === 'News') {
-      window.open('https://www.moneycontrol.com/news/business/markets/', '_blank', 'noopener,noreferrer')
-      return
-    }
-    setTab(label === 'Patterns' ? 'patterns' : label === 'Dividends' ? 'dividends' : label === 'Watchlist' ? 'watchlist' : 'top30')
+    setTab(label === 'News' ? 'news' : label === 'Patterns' ? 'patterns' : label === 'Dividends' ? 'dividends' : label === 'Watchlist' ? 'watchlist' : 'top30')
     setMenu(false)
   }
 
-  const activeNav = tab === 'patterns' ? 'Patterns' : tab === 'dividends' ? 'Dividends' : tab === 'watchlist' ? 'Watchlist' : 'Analysis'
-  
+  const exportExcel = () => {
+    const workbook = XLSX.utils.book_new()
+    const stockRows = items => items.map(stock => ({
+      Symbol: stock.s,
+      Company: stock.n,
+      Sector: stock.sector || '',
+      Category: stock.c || '',
+      Price: stock.currentPrice || '',
+      'Today Change %': stock.change || 0,
+      'Technical Score': stock.technicalScore || 0,
+      RSI: stock.rsi || '',
+      Trend: stock.marketStructure?.trend || '',
+      Pattern: stock.pattern?.type || '',
+      'Pattern Direction': stock.pattern?.direction || '',
+      'Intraday Target': stock.intradayTarget || '',
+      'Intraday Stop Loss': stock.intradayStopLoss || '',
+      'Swing Target': stock.swingTarget || '',
+      'Swing Stop Loss': stock.swingStopLoss || ''
+    }))
+    const addSheet = (name, rows, fallback = [{ Status: 'No data available' }]) => {
+      XLSX.utils.book_append_sheet(workbook, XLSX.utils.json_to_sheet(rows.length ? rows : fallback), name)
+    }
+
+    addSheet('Top 100', stockRows(top100))
+    addSheet('Large Cap', stockRows(largeCaps))
+    addSheet('Mid Cap', stockRows(midCaps))
+    addSheet('Small Cap', stockRows(smallCaps))
+    addSheet('Watchlist', stockRows(watchlistStocks))
+    addSheet('Patterns', stockRows([...bullishPatterns, ...bearishPatterns]))
+    addSheet('News Movers', newsMovers.map(({ stock, articles }) => ({
+      ...stockRows([stock])[0],
+      'News Matches': articles.length,
+      'Latest Headline': articles[0]?.title || 'No direct headline match',
+      'Headline Link': articles[0]?.link || ''
+    })))
+    addSheet('Broker Calls', brokerCalls.map(item => ({
+      Symbol: item.stock.s,
+      Company: item.stock.n,
+      Broker: item.broker.name,
+      'Strategy Desk': item.broker.style,
+      Call: item.call,
+      Price: item.stock.currentPrice || '',
+      Target: item.target,
+      'Stop Loss': item.stopLoss,
+      'Expected Upside %': Number(item.upside.toFixed(2)),
+      Horizon: item.broker.horizon,
+      Confidence: item.confidence,
+      Rationale: item.rationale
+    })))
+    addSheet('Dividends', nseDividends.map(dividend => ({
+      Company: dividend.company,
+      Purpose: dividend.purpose,
+      'Ex-Date': dividend.exDate,
+      'Record Date': dividend.recordDate,
+      'Face Value': dividend.faceValue,
+      Published: dividend.publishedAt,
+      Source: dividend.source
+    })))
+
+    XLSX.writeFile(workbook, `stock-pulse-india-${new Date().toISOString().slice(0, 10)}.xlsx`)
+  }
+
   return (
     <div className="app">
       <header className="topbar">
@@ -643,23 +779,16 @@ function StockAnalysisDashboard() {
           <div className="logo"><Sparkles size={20} /></div>
           <div><b>Stock Pulse</b><span>AI ANALYSIS</span></div>
         </div>
-        <nav className={menu ? 'open' : ''}>
-          {['Dashboard', 'Top 100', 'Analysis', 'Patterns', 'News', 'Dividends', 'Watchlist'].map((x, i) => (
-            <button
-              key={x}
-              className={x === activeNav ? 'active' : ''}
-              onClick={() => handleNavClick(x)}
-            >
-              {x}
-            </button>
-          ))}
-        </nav>
+        <div className="market-cockpit">
+          <div className="cockpit-status"><span className="live-dot" /> LIVE MARKET PULSE</div>
+          <div className="cockpit-divider" />
+          <div className="cockpit-stat"><strong>{stocks.length || '—'}</strong><span>stocks tracked</span></div>
+          <div className="cockpit-stat"><strong>AI</strong><span>analysis online</span></div>
+          <div className="cockpit-date"><span>INDIA · NSE / BSE</span><strong>{new Date().toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' })}</strong></div>
+        </div>
         <div className="top-actions">
           <button className="iconbtn"><Bell size={18} /></button>
           <button className="profile">AI</button>
-          <button className="iconbtn mobile-menu" onClick={() => setMenu(!menu)}>
-            {menu ? <X /> : <Menu />}
-          </button>
         </div>
       </header>
 
@@ -686,6 +815,9 @@ function StockAnalysisDashboard() {
             <button className="refresh" onClick={() => window.location.reload()}>
               <RefreshCw size={17} /> Refresh Analysis
             </button>
+            <button className="export-excel" onClick={exportExcel} disabled={loading && stocks.length === 0}>
+              <Download size={17} /> Download Excel
+            </button>
           </div>
         </section>
 
@@ -707,6 +839,15 @@ function StockAnalysisDashboard() {
           <button className={tab === 'patterns' ? 'active' : ''} onClick={() => setTab('patterns')}>
             📊 Patterns
           </button>
+          <button className={tab === 'news' ? 'active' : ''} onClick={() => setTab('news')}>
+            📰 News Movers
+          </button>
+          <button className={tab === 'brokerCalls' ? 'active' : ''} onClick={() => setTab('brokerCalls')}>
+            🎯 Broker Calls
+          </button>
+          <button className={tab === 'ai' ? 'active' : ''} onClick={() => setTab('ai')}>
+            ✦ AI Q&amp;A
+          </button>
           <button className={tab === 'dividends' ? 'active' : ''} onClick={() => setTab('dividends')}>
             💰 Dividends ({nseDividends.length})
           </button>
@@ -715,7 +856,7 @@ function StockAnalysisDashboard() {
           </button>
         </section>
 
-        {tab !== 'dividends' && (
+        {tab !== 'dividends' && tab !== 'news' && tab !== 'brokerCalls' && tab !== 'ai' && (
           <StockSortControls sortConfig={sortConfig} onChange={setSortConfig} />
         )}
 
@@ -877,6 +1018,18 @@ function StockAnalysisDashboard() {
                   <PatternGrid patterns={bearishPatterns} onSelect={setSelectedStock} watchlistSymbols={watchlistSymbols} onToggleWatchlist={toggleWatchlist} />
                 </div>
               </section>
+            )}
+
+            {tab === 'news' && (
+              <NewsMovers movers={newsMovers} loading={newsLoading} error={newsError} />
+            )}
+
+            {tab === 'brokerCalls' && (
+              <BrokerCalls calls={brokerCalls} onSelect={setSelectedStock} />
+            )}
+
+            {tab === 'ai' && (
+              <AIQueryPanel stocks={stocks} brokerCalls={brokerCalls} newsMovers={newsMovers} onSelect={setSelectedStock} />
             )}
 
             {tab === 'dividends' && (
@@ -1070,6 +1223,170 @@ function DividendCalendar({ dividends, loading, error }) {
   )
 }
 
+function AIQueryPanel({ stocks, brokerCalls, newsMovers, onSelect }) {
+  const [query, setQuery] = useState('')
+  const [messages, setMessages] = useState([
+    { role: 'assistant', text: 'Ask me about today\'s gainers, a stock\'s trend, RSI, broker calls, news movers, or technical levels.' }
+  ])
+
+  const answerQuery = (rawQuery) => {
+    const normalized = rawQuery.toLowerCase()
+    const stock = stocks.find(item => normalized.includes(item.s.toLowerCase()) || normalized.includes(item.n.toLowerCase()))
+
+    if (!stocks.length) return { text: 'Market analysis is still loading. Please try again in a moment.' }
+
+    if (/top|gainer|gains|ris(e|ing)|strongest|best/.test(normalized)) {
+      const gainers = stocks.filter(item => item.change > 0).sort((first, second) => second.change - first.change).slice(0, 5)
+      return { text: `Today's strongest positive movers are ${gainers.map(item => `${item.s} (+${item.change.toFixed(2)}%)`).join(', ')}.`, stocks: gainers }
+    }
+
+    if (/buy|bullish|recommend|calls?/.test(normalized)) {
+      const buys = brokerCalls.filter(item => item.call === 'BUY').slice(0, 5)
+      return { text: `The strongest model BUY calls are ${buys.map(item => `${item.stock.s} (target ₹${item.target.toFixed(2)})`).join(', ')}. These are technical signals, not financial advice.`, stocks: buys.map(item => item.stock) }
+    }
+
+    if (/news|headline|mover/.test(normalized)) {
+      const movers = newsMovers.filter(item => item.articles.length > 0).slice(0, 5)
+      return { text: movers.length ? `The most relevant news-linked movers are ${movers.map(item => `${item.stock.s} (${item.articles.length} headline match${item.articles.length === 1 ? '' : 'es'})`).join(', ')}.` : 'No direct stock headline matches are available yet. I can still show today\'s largest percentage movers.', stocks: movers.map(item => item.stock) }
+    }
+
+    if (stock) {
+      const call = brokerCalls.find(item => item.stock.symbol === stock.symbol)
+      return {
+        text: `${stock.s} is at ₹${stock.currentPrice?.toFixed(2)} and is ${stock.change >= 0 ? `up ${stock.change.toFixed(2)}%` : `down ${Math.abs(stock.change).toFixed(2)}%`} today. Trend: ${stock.marketStructure?.trend || ' unavailable'}. RSI: ${stock.rsi?.toFixed(1) || 'N/A'}. Technical score: ${stock.technicalScore || 'N/A'}.${call ? ` Current model call: ${call.call}, target ₹${call.target.toFixed(2)}, stop-loss ₹${call.stopLoss.toFixed(2)}.` : ''}`,
+        stocks: [stock]
+      }
+    }
+
+    if (/rsi|oversold|overbought/.test(normalized)) {
+      const rsiStocks = stocks.filter(item => item.rsi < 30 || item.rsi > 70).sort((first, second) => Math.abs(second.rsi - 50) - Math.abs(first.rsi - 50)).slice(0, 5)
+      return { text: rsiStocks.length ? `The most extreme RSI readings are ${rsiStocks.map(item => `${item.s} (${item.rsi.toFixed(1)})`).join(', ')}.` : 'No stocks are currently in an extreme RSI zone.', stocks: rsiStocks }
+    }
+
+    return { text: 'I can answer questions about a stock, today\'s top gainers, BUY calls, RSI, news movers, trends, targets, and stop-loss levels. Try: “What is the view on RELIANCE?”' }
+  }
+
+  const submitQuery = event => {
+    event.preventDefault()
+    const trimmedQuery = query.trim()
+    if (!trimmedQuery) return
+    const answer = answerQuery(trimmedQuery)
+    setMessages(current => [...current, { role: 'user', text: trimmedQuery }, { role: 'assistant', ...answer }])
+    setQuery('')
+  }
+
+  return (
+    <section className="card ai-panel">
+      <div className="ai-panel-header">
+        <div className="ai-orb"><Bot size={24} /></div>
+        <div><h2>AI Market Q&amp;A</h2><p>Ask questions using the latest analysis loaded in this dashboard.</p></div>
+        <span className="ai-live">LIVE DATA</span>
+      </div>
+      <div className="ai-suggestions">
+        {['Top gainers today', 'What is the view on RELIANCE?', 'Show BUY calls', 'Which stocks are overbought?'].map(suggestion => (
+          <button key={suggestion} onClick={() => setQuery(suggestion)}>{suggestion}</button>
+        ))}
+      </div>
+      <div className="ai-conversation" aria-live="polite">
+        {messages.map((message, index) => (
+          <div key={`${message.role}-${index}`} className={`ai-message ${message.role}`}>
+            <span className="ai-message-icon">{message.role === 'assistant' ? <Bot size={15} /> : 'You'}</span>
+            <div><p>{message.text}</p>{message.stocks?.length > 0 && <div className="ai-stock-links">{message.stocks.map(item => <button key={item.symbol} onClick={() => onSelect(item)}>{item.s} <span>{item.change >= 0 ? '+' : ''}{item.change?.toFixed(2)}%</span></button>)}</div>}</div>
+          </div>
+        ))}
+      </div>
+      <form className="ai-query-form" onSubmit={submitQuery}>
+        <input value={query} onChange={event => setQuery(event.target.value)} placeholder="Ask about a stock or the market..." aria-label="Ask the AI market assistant" />
+        <button type="submit" aria-label="Send question"><Send size={17} /></button>
+      </form>
+      <small className="ai-disclaimer">Answers use the app's live technical dataset and are for research only, not financial advice.</small>
+    </section>
+  )
+}
+
+function BrokerCalls({ calls, onSelect }) {
+  return (
+    <section className="card analysis-section broker-calls">
+      <div className="dividend-heading">
+        <div>
+          <h2>BROKER CALLS ({calls.length})</h2>
+          <p>Model-derived strategy views using live technical data. Click any stock for the full analysis popup.</p>
+        </div>
+        <span className="dividend-count">6 desks</span>
+      </div>
+      <div className="broker-disclaimer">These are technical model signals mapped to broker-style strategy desks, not published recommendations from the named firms.</div>
+      {calls.length === 0 ? (
+        <div className="no-results">Broker calls will appear after market data loads.</div>
+      ) : (
+        <div className="table-wrapper">
+          <table className="analysis-table broker-table">
+            <thead>
+              <tr><th>Rank</th><th>Stock</th><th>Broker desk</th><th>Call</th><th>Price</th><th>Target</th><th>Stop-loss</th><th>Upside</th><th>Horizon</th><th>Confidence</th><th>Details</th></tr>
+            </thead>
+            <tbody>
+              {calls.map((item, index) => (
+                <tr key={`${item.stock.symbol}-${item.broker.name}`} onClick={() => onSelect(item.stock)}>
+                  <td className="rank">{index + 1}</td>
+                  <td className="stock-name"><strong>{item.stock.s}</strong><small>{item.stock.n} | {item.stock.sector || 'Other'}</small></td>
+                  <td><strong>{item.broker.name}</strong><small className="broker-style">{item.broker.style}</small></td>
+                  <td><span className={`broker-call ${item.call.toLowerCase()}`}>{item.call}</span></td>
+                  <td>₹{item.stock.currentPrice?.toFixed(2)}</td>
+                  <td className="positive">₹{item.target.toFixed(2)}</td>
+                  <td className="negative">₹{item.stopLoss.toFixed(2)}</td>
+                  <td className={item.upside >= 0 ? 'positive' : 'negative'}>{item.upside >= 0 ? '+' : ''}{item.upside.toFixed(1)}%</td>
+                  <td>{item.broker.horizon}</td>
+                  <td><span className="confidence-meter"><i style={{ width: `${item.confidence}%` }} />{item.confidence}%</span></td>
+                  <td><button className="detail-btn" onClick={event => { event.stopPropagation(); onSelect(item.stock) }}>View</button></td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+    </section>
+  )
+}
+
+function NewsMovers({ movers, loading, error }) {
+  return (
+    <section className="card analysis-section news-movers">
+      <div className="dividend-heading">
+        <div>
+          <h2>NEWS MOVERS ({movers.length})</h2>
+          <p>Stocks ranked by today's market headlines and positive price movement.</p>
+        </div>
+        <span className="dividend-count">Live feed</span>
+      </div>
+      {error && <div className="search-error">{error}</div>}
+      {loading && movers.length === 0 ? (
+        <div className="loading"><RefreshCw className="spin" size={24} /><p>Loading today's market news...</p></div>
+      ) : movers.length === 0 ? (
+        <div className="no-results">Market movers are not available yet.</div>
+      ) : (
+        <div className="table-wrapper">
+          <table className="analysis-table">
+            <thead>
+              <tr><th>Rank</th><th>Stock</th><th>Today</th><th>News</th><th>Latest headline</th><th>Action</th></tr>
+            </thead>
+            <tbody>
+              {movers.map(({ stock, articles }, index) => (
+                <tr key={stock.symbol}>
+                  <td className="rank">{index + 1}</td>
+                  <td className="stock-name"><strong>{stock.s}</strong><small>{stock.n} | {stock.sector || 'Other'}</small></td>
+                  <td className={stock.change >= 0 ? 'positive' : 'negative'}>{stock.change >= 0 ? '+' : ''}{stock.change?.toFixed(2)}%</td>
+                  <td><span className="news-count">{articles.length ? `${articles.length} match${articles.length === 1 ? '' : 'es'}` : 'Market mover'}</span></td>
+                  <td className="news-headline">{articles[0] ? <a href={articles[0].link} target="_blank" rel="noreferrer">{articles[0].title}</a> : 'No direct headline match'}</td>
+                  <td><span className="sector">{stock.c}</span></td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+    </section>
+  )
+}
+
 function PatternGrid({ patterns, onSelect, watchlistSymbols, onToggleWatchlist }) {
   return (
     <div className="patterns-grid">
@@ -1107,6 +1424,37 @@ function PatternGrid({ patterns, onSelect, watchlistSymbols, onToggleWatchlist }
 }
 
 function StockDetailPanel({ stock, onClose, isWatched, onToggleWatchlist }) {
+  const [selectedTimeframe, setSelectedTimeframe] = useState('year')
+  const [chartData, setChartData] = useState(stock.chart || [])
+  const [chartLoading, setChartLoading] = useState(false)
+
+  useEffect(() => {
+    let cancelled = false
+    const timeframe = CHART_TIMEFRAMES[selectedTimeframe]
+
+    if (selectedTimeframe === 'year' && stock.chart?.length > 1) {
+      setChartData(stock.chart)
+      setChartLoading(false)
+      return undefined
+    }
+
+    const loadChart = async () => {
+      setChartLoading(true)
+      const data = await fetchHistoricalData(stock.symbol, timeframe.range, timeframe.interval)
+      if (!cancelled) {
+        const nextChart = data?.closes?.map((value, index) => ({
+          name: data.timestamps[index] ? new Date(data.timestamps[index] * 1000).toLocaleDateString('en-IN', { day: '2-digit', month: 'short' }) : '',
+          value: Number(Number(value).toFixed(2))
+        })) || []
+        setChartData(nextChart)
+        setChartLoading(false)
+      }
+    }
+
+    loadChart()
+    return () => { cancelled = true }
+  }, [selectedTimeframe, stock.symbol, stock.chart])
+
   return (
     <div className="detail-panel">
       <div className="panel-header">
@@ -1137,11 +1485,20 @@ function StockDetailPanel({ stock, onClose, isWatched, onToggleWatchlist }) {
         <div className="detail-chart">
           <div className="detail-chart-header">
             <h3>Recent Price Trend</h3>
-            <span>5 years · daily</span>
+            <span>{CHART_TIMEFRAMES[selectedTimeframe].detail}</span>
           </div>
-          {stock.chart?.length > 1 ? (
+          <div className="chart-timeframes" role="group" aria-label="Chart timeframe">
+            {Object.entries(CHART_TIMEFRAMES).map(([key, timeframe]) => (
+              <button key={key} className={selectedTimeframe === key ? 'active' : ''} onClick={() => setSelectedTimeframe(key)}>
+                {timeframe.label}
+              </button>
+            ))}
+          </div>
+          {chartLoading ? (
+            <div className="detail-chart-empty">Loading chart...</div>
+          ) : chartData.length > 1 ? (
             <ResponsiveContainer width="100%" height={190}>
-              <AreaChart data={stock.chart} margin={{ top: 8, right: 4, left: 4, bottom: 0 }}>
+              <AreaChart data={chartData} margin={{ top: 8, right: 4, left: 4, bottom: 0 }}>
                 <defs>
                   <linearGradient id="detailPriceFill" x1="0" y1="0" x2="0" y2="1">
                     <stop offset="0%" stopColor="var(--blue)" stopOpacity={0.32} />
