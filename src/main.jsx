@@ -422,7 +422,7 @@ const analyzeStock = async (stock) => {
   const ema50 = calculateEMA(closes, 50)
   const ema200 = calculateEMA(closes, 200)
   const rsi = calculateRSI(closes, 14)
-  const { macd, signal } = calculateMACD(closes)
+  const { macd, signal, histogram } = calculateMACD(closes)
   const vwap = calculateVWAP(highs, lows, closes, volumes)
   const { adx } = calculateADX(highs, lows, closes, 14)
   const { support, resistance, pivot } = calculateSuportResistance(highs, lows, closes)
@@ -439,6 +439,7 @@ const analyzeStock = async (stock) => {
   const latestRsi = Number(rsi[rsi.length - 1] ?? 50)
   const latestMacd = Number(macd[macd.length - 1] ?? 0)
   const latestSignal = Number(signal[signal.length - 1] ?? 0)
+  const latestMacdHistogram = Number(histogram[histogram.length - 1] ?? 0)
   const latestVwap = Number(vwap[vwap.length - 1] ?? currentPrice)
   const latestAdx = Number(adx[adx.length - 1] ?? 0)
   const latestEma9 = Number(ema9[ema9.length - 1] ?? currentPrice)
@@ -471,6 +472,7 @@ const analyzeStock = async (stock) => {
     rsi: latestRsi,
     macd: latestMacd,
     signal: latestSignal,
+    macdHistogram: latestMacdHistogram,
     vwap: latestVwap,
     adx: latestAdx,
     support,
@@ -525,6 +527,36 @@ function StockAnalysisDashboard() {
   const [menu, setMenu] = useState(false)
   const [sortConfig, setSortConfig] = useState({ key: 'change', direction: 'desc' })
 
+  const loadAnalysis = async () => {
+    setLoading(true)
+    try {
+      // Load in batches of 5 to avoid overwhelming the API
+      const batchSize = 5
+      let allResults = []
+      
+      for (let i = 0; i < STOCK_CONFIG.length; i += batchSize) {
+        const batch = STOCK_CONFIG.slice(i, i + batchSize)
+        const results = await Promise.all(batch.map(s => analyzeStock(s)))
+        allResults = [...allResults, ...results]
+        
+        // Update UI with partial results
+        const filtered = allResults.filter(s => s !== null)
+        if (filtered.length > 0) {
+          const sorted = filtered.sort((a, b) => (b.technicalScore || 0) - (a.technicalScore || 0))
+          setStocks(sorted)
+        }
+      }
+      
+      const filtered = allResults.filter(s => s !== null)
+      const sorted = filtered.sort((a, b) => (b.technicalScore || 0) - (a.technicalScore || 0))
+      setStocks(sorted)
+    } catch (error) {
+      console.error('Error loading analysis:', error)
+    } finally {
+      setLoading(false)
+    }
+  }
+
   const handleStockSearch = async (event) => {
     event.preventDefault()
     const input = searchQuery.trim().toUpperCase()
@@ -562,38 +594,8 @@ function StockAnalysisDashboard() {
   }
   
   useEffect(() => {
-    const loadAnalysis = async () => {
-      setLoading(true)
-      try {
-        // Load in batches of 5 to avoid overwhelming the API
-        const batchSize = 5
-        let allResults = []
-        
-        for (let i = 0; i < STOCK_CONFIG.length; i += batchSize) {
-          const batch = STOCK_CONFIG.slice(i, i + batchSize)
-          const results = await Promise.all(batch.map(s => analyzeStock(s)))
-          allResults = [...allResults, ...results]
-          
-          // Update UI with partial results
-          const filtered = allResults.filter(s => s !== null)
-          if (filtered.length > 0) {
-            const sorted = filtered.sort((a, b) => (b.technicalScore || 0) - (a.technicalScore || 0))
-            setStocks(sorted)
-          }
-        }
-        
-        const filtered = allResults.filter(s => s !== null)
-        const sorted = filtered.sort((a, b) => (b.technicalScore || 0) - (a.technicalScore || 0))
-        setStocks(sorted)
-      } catch (error) {
-        console.error('Error loading analysis:', error)
-      } finally {
-        setLoading(false)
-      }
-    }
-    
     loadAnalysis()
-    const interval = setInterval(loadAnalysis, 600000) // 10 minutes
+    const interval = setInterval(loadAnalysis, 300000) // 5 minutes
     return () => clearInterval(interval)
   }, [])
 
@@ -650,10 +652,10 @@ function StockAnalysisDashboard() {
     return sortConfig.direction === 'asc' ? result : -result
   })
 
-  const largeCaps = useMemo(() => sortStocks(stocks.filter(s => s.c === 'Large Cap')).slice(0, 100), [stocks, sortConfig])
-  const midCaps = useMemo(() => sortStocks(stocks.filter(s => s.c === 'Mid Cap')).slice(0, 100), [stocks, sortConfig])
-  const smallCaps = useMemo(() => sortStocks(stocks.filter(s => s.c === 'Small Cap')).slice(0, 100), [stocks, sortConfig])
-  const top100 = useMemo(() => sortStocks(stocks).slice(0, 100), [stocks, sortConfig])
+  const largeCaps = useMemo(() => sortStocks(stocks.filter(s => s.c === 'Large Cap')).slice(0, 50), [stocks, sortConfig])
+  const midCaps = useMemo(() => sortStocks(stocks.filter(s => s.c === 'Mid Cap')).slice(0, 50), [stocks, sortConfig])
+  const smallCaps = useMemo(() => sortStocks(stocks.filter(s => s.c === 'Small Cap')).slice(0, 50), [stocks, sortConfig])
+  const top50 = useMemo(() => sortStocks(stocks).slice(0, 50), [stocks, sortConfig])
   const sortPatterns = (items) => [...items].sort((first, second) => {
     const confidenceDifference = (second.pattern?.confidence || 0) - (first.pattern?.confidence || 0)
     return confidenceDifference || (second.technicalScore || 0) - (first.technicalScore || 0)
@@ -733,7 +735,7 @@ function StockAnalysisDashboard() {
       XLSX.utils.book_append_sheet(workbook, XLSX.utils.json_to_sheet(rows.length ? rows : fallback), name)
     }
 
-    addSheet('Top 100', stockRows(top100))
+    addSheet('Top 50', stockRows(top50))
     addSheet('Large Cap', stockRows(largeCaps))
     addSheet('Mid Cap', stockRows(midCaps))
     addSheet('Small Cap', stockRows(smallCaps))
@@ -776,7 +778,11 @@ function StockAnalysisDashboard() {
     <div className="app">
       <header className="topbar">
         <div className="brand">
-          <div className="logo"><Sparkles size={20} /></div>
+          <div className="logo" aria-label="Stock Pulse logo">
+            <span className="logo-grid" aria-hidden="true" />
+            <span className="logo-pulse" aria-hidden="true" />
+            <span className="logo-bars" aria-hidden="true"><i /><i /><i /></span>
+          </div>
           <div><b>Stock Pulse</b><span>AI ANALYSIS</span></div>
         </div>
         <div className="market-cockpit">
@@ -797,7 +803,7 @@ function StockAnalysisDashboard() {
           <div>
             <div className="eyebrow"><span className="live-dot" /> REAL-TIME TECHNICAL ANALYSIS</div>
             <h1>Indian Stock Market <em>AI Engine</em></h1>
-            <p>Advanced technical analysis with chart patterns, indicators, market regime detection, and risk/reward scoring for 100 top stocks across Large, Mid, and Small Cap categories.</p>
+            <p>Advanced technical analysis with chart patterns, indicators, market regime detection, and risk/reward scoring for the top 50 stocks across Large, Mid, and Small Cap categories.</p>
           </div>
           <div className="hero-actions">
             <form className="stock-search" onSubmit={handleStockSearch}>
@@ -812,8 +818,8 @@ function StockAnalysisDashboard() {
                 {searching ? 'Analyzing...' : 'Analyze'}
               </button>
             </form>
-            <button className="refresh" onClick={() => window.location.reload()}>
-              <RefreshCw size={17} /> Refresh Analysis
+            <button className="refresh" onClick={loadAnalysis} disabled={loading}>
+              <RefreshCw className={loading ? 'spin' : ''} size={17} /> {loading ? 'Refreshing...' : 'Refresh Analysis'}
             </button>
             <button className="export-excel" onClick={exportExcel} disabled={loading && stocks.length === 0}>
               <Download size={17} /> Download Excel
@@ -825,7 +831,7 @@ function StockAnalysisDashboard() {
 
         <section className="tabs-nav">
           <button className={tab === 'top30' ? 'active' : ''} onClick={() => setTab('top30')}>
-            🏆 Top 100 Opportunities
+            🏆 Top 50 Opportunities
           </button>
           <button className={tab === 'largecap' ? 'active' : ''} onClick={() => setTab('largecap')}>
             🥇 Large Cap ({largeCaps.length})
@@ -872,7 +878,7 @@ function StockAnalysisDashboard() {
           <>
             {tab === 'top30' && (
               <section className="card analysis-section">
-                <h2>🏆 TOP 100 RANKED STOCKS</h2>
+                <h2>🏆 TOP 50 RANKED STOCKS</h2>
                 <div className="table-wrapper">
                   <table className="analysis-table">
                     <thead>
@@ -891,7 +897,7 @@ function StockAnalysisDashboard() {
                       </tr>
                     </thead>
                     <tbody>
-                      {top100.map((stock, idx) => (
+                      {top50.map((stock, idx) => (
                         <tr key={stock.s} onClick={() => setSelectedStock(stock)}>
                           <td className="rank">{idx + 1}</td>
                           <td className="stock-name">
@@ -1527,14 +1533,14 @@ function StockDetailPanel({ stock, onClose, isWatched, onToggleWatchlist }) {
             <small>{stock.rsi > 70 ? 'Overbought' : stock.rsi < 30 ? 'Oversold' : 'Neutral'}</small>
           </div>
           <div className="indicator-box">
-            <label>MACD</label>
-            <strong>{stock.macd?.toFixed(4)}</strong>
-            <small>{stock.macd > stock.signal ? 'Bullish' : 'Bearish'}</small>
+            <label>MACD (12, 26, 9)</label>
+            <strong>{stock.macd?.toFixed(2)}</strong>
+            <small>Signal {stock.signal?.toFixed(2)} · {stock.macdHistogram >= 0 ? 'Bullish' : 'Bearish'}</small>
           </div>
           <div className="indicator-box">
-            <label>ADX</label>
+            <label>ADX (14)</label>
             <strong>{stock.adx?.toFixed(2)}</strong>
-            <small>{stock.adx > 25 ? 'Strong Trend' : 'Weak Trend'}</small>
+            <small>{stock.adx > 25 ? 'Strong trend' : 'Weak / sideways'} · {stock.marketStructure?.trend || 'Neutral'}</small>
           </div>
           <div className="indicator-box">
             <label>Volume RVOL</label>

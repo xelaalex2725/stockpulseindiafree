@@ -40,18 +40,18 @@ export const calculateRSI = (data, period = 14) => {
   
   let avgGain = gains / period
   let avgLoss = losses / period
-  const rsi = [100 - (100 / (1 + avgGain / avgLoss))]
+  const rsiValue = () => {
+    if (avgLoss === 0) return avgGain === 0 ? 50 : 100
+    return 100 - (100 / (1 + avgGain / avgLoss))
+  }
+  const rsi = [rsiValue()]
   
   for (let i = period; i < changes.length; i++) {
-    if (changes[i] > 0) gains = changes[i]
-    else {
-      gains = 0
-      losses = Math.abs(changes[i])
-    }
-    
-    avgGain = (avgGain * (period - 1) + gains) / period
-    avgLoss = (avgLoss * (period - 1) + losses) / period
-    rsi.push(100 - (100 / (1 + avgGain / avgLoss)))
+    const gain = Math.max(changes[i], 0)
+    const loss = Math.max(-changes[i], 0)
+    avgGain = (avgGain * (period - 1) + gain) / period
+    avgLoss = (avgLoss * (period - 1) + loss) / period
+    rsi.push(rsiValue())
   }
   
   return rsi
@@ -60,16 +60,22 @@ export const calculateRSI = (data, period = 14) => {
 export const calculateMACD = (data, fast = 12, slow = 26, signal = 9) => {
   const fastEMA = calculateEMA(data, fast)
   const slowEMA = calculateEMA(data, slow)
-  
+
   const macdLine = []
-  const startIdx = Math.max(fastEMA.length, slowEMA.length) - Math.min(fastEMA.length, slowEMA.length)
-  
-  for (let i = startIdx; i < data.length; i++) {
-    macdLine.push(fastEMA[i - (data.length - fastEMA.length)] - slowEMA[i - (data.length - slowEMA.length)])
+  const firstAlignedIndex = slow - 1
+
+  for (let i = firstAlignedIndex; i < data.length; i++) {
+    const fastValue = fastEMA[i - (fast - 1)]
+    const slowValue = slowEMA[i - (slow - 1)]
+    macdLine.push(fastValue - slowValue)
   }
-  
+
   const signalLine = calculateEMA(macdLine, signal)
-  const histogram = macdLine.map((m, i) => m - (signalLine[i] || signalLine[signalLine.length - 1]))
+  const histogram = macdLine.map((macdValue, index) => {
+    const signalIndex = index - (signal - 1)
+    const signalValue = signalIndex >= 0 ? signalLine[signalIndex] : null
+    return signalValue == null ? 0 : macdValue - signalValue
+  })
   
   return { macd: macdLine, signal: signalLine, histogram }
 }
@@ -95,10 +101,13 @@ export const calculateADX = (high, low, close, period = 14) => {
   const atr = calculateSMA(tr, period)
   const plusDI = []
   const minusDI = []
-  
+  const smoothedPlusDM = calculateSMA(plusDM, period)
+  const smoothedMinusDM = calculateSMA(minusDM, period)
+
   for (let i = 0; i < atr.length; i++) {
-    plusDI.push((calculateSMA(plusDM, period)[i] || 0) / atr[i] * 100)
-    minusDI.push((calculateSMA(minusDM, period)[i] || 0) / atr[i] * 100)
+    const currentAtr = atr[i] || 0
+    plusDI.push(currentAtr > 0 ? (smoothedPlusDM[i] || 0) / currentAtr * 100 : 0)
+    minusDI.push(currentAtr > 0 ? (smoothedMinusDM[i] || 0) / currentAtr * 100 : 0)
   }
   
   const dx = []
