@@ -70,7 +70,7 @@ app.get('/api/dividends', async (req, res) => {
 app.get('/api/news', async (req, res) => {
   const feeds = [
     { url: 'https://www.moneycontrol.com/rss/marketreports.xml', source: 'Moneycontrol' },
-    { url: 'https://news.google.com/rss/search?q=Indian+stock+market+when%3A1d&hl=en-IN&gl=IN&ceid=IN%3Aen', source: 'Google News' }
+    { url: 'https://news.google.com/rss/search?q=Indian+stock+market+when%3A7d&hl=en-IN&gl=IN&ceid=IN%3Aen', source: 'Google News' }
   ]
 
   try {
@@ -94,9 +94,18 @@ app.get('/api/news', async (req, res) => {
 app.get('/api/chart/:symbol', async (req, res) => {
   const { symbol } = req.params
   const { range = '1y', interval = '1d', events = 'div' } = req.query
+  const allowedRanges = new Set(['1d', '5d', '1mo', '3mo', '6mo', 'ytd', '1y', '2y', '5y', '10y', 'max'])
+  const allowedIntervals = new Set(['1m', '2m', '5m', '15m', '30m', '60m', '90m', '1h', '1d', '5d', '1wk', '1mo', '3mo'])
+
+  if (!/^[A-Z0-9&-]+\.(NS|BO)$/i.test(symbol)) {
+    return res.status(400).json({ error: 'A valid NSE or BSE symbol is required' })
+  }
+  if (!allowedRanges.has(range) || !allowedIntervals.has(interval) || events !== 'div') {
+    return res.status(400).json({ error: 'Invalid chart query parameters' })
+  }
   
   try {
-    const url = `https://query1.finance.yahoo.com/v8/finance/chart/${symbol}?range=${range}&interval=${interval}&events=${events}`
+    const url = `https://query1.finance.yahoo.com/v8/finance/chart/${encodeURIComponent(symbol)}?range=${range}&interval=${interval}&events=${events}`
     
     const response = await fetch(url, {
       headers: {

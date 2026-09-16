@@ -3,9 +3,14 @@ export default async function handler(request, response) {
   const range = request.query.range || '1y'
   const interval = request.query.interval || '1d'
   const events = request.query.events || 'div'
+  const allowedRanges = new Set(['1d', '5d', '1mo', '3mo', '6mo', 'ytd', '1y', '2y', '5y', '10y', 'max'])
+  const allowedIntervals = new Set(['1m', '2m', '5m', '15m', '30m', '60m', '90m', '1h', '1d', '5d', '1wk', '1mo', '3mo'])
 
   if (!symbol || !/^[A-Z0-9&-]+\.(NS|BO)$/i.test(symbol)) {
     return response.status(400).json({ error: 'A valid NSE or BSE symbol is required' })
+  }
+  if (!allowedRanges.has(range) || !allowedIntervals.has(interval) || events !== 'div') {
+    return response.status(400).json({ error: 'Invalid chart query parameters' })
   }
 
   try {
