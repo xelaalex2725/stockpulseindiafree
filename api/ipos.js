@@ -35,6 +35,7 @@ const normalizeIpo = item => {
   closeDate,
   listingDate,
   priceRange: String(read(item, ['priceRange', 'priceBand', 'issuePrice']) || 'Not disclosed'),
+  currentPrice: String(read(item, ['currentPrice', 'lastPrice', 'marketPrice']) || ''),
   issueSize: String(read(item, ['issueSize', 'issueSizeInCrores', 'totalIssueSize']) || 'Not disclosed'),
   lotSize: String(read(item, ['marketLot', 'lotSize', 'minimumLotSize']) || 'Not disclosed'),
   subscription: String(read(item, ['subscription', 'subscriptionStatus']) || 'Not available'),

@@ -2,11 +2,10 @@ import React, { useEffect, useMemo, useState } from 'react'
 import { createRoot } from 'react-dom/client'
 import {
   BarChart3, Bell, BookOpen, ExternalLink, Gauge, Globe2, Layers3, LineChart,
-  Menu, Newspaper, RefreshCw, Search, ShieldCheck, Sparkles, Star, TrendingDown, TrendingUp, X, Download,
+  Menu, Newspaper, RefreshCw, Search, ShieldCheck, Sparkles, Star, TrendingDown, TrendingUp, X,
   AlertCircle, CheckCircle, Zap, Activity, Send, Bot
 } from 'lucide-react'
 import { ResponsiveContainer, BarChart, Bar, Brush, XAxis, YAxis, Tooltip, Line } from 'recharts'
-import * as XLSX from 'xlsx'
 import { calculateEMA, calculateRSI, calculateMACD, calculateADX, calculateVWAP, detectChartPattern, calculateMarketStructure, calculateSuportResistance, calculateVolumAnalysis, scoreSetup } from './technicalAnalysis'
 import './styles.css'
 import './financials.css'
@@ -330,13 +329,57 @@ const STOCK_CONFIG = dedupeBySymbol([
   ...SMALL_CAP_STOCKS.map(stock => ({ ...stock, c: 'Small Cap' }))
 ])
 
+const resolveSector = stock => {
+  if (stock.sector && stock.sector !== 'Unclassified') return stock.sector
+  const configuredStock = STOCK_CONFIG.find(item => item.symbol === stock.symbol || item.s === stock.s)
+  if (configuredStock?.sector) return configuredStock.sector
+  const text = `${stock.s || ''} ${stock.n || ''}`.toLowerCase()
+  const sectorKeywords = [
+    ['bank|finance|financial|capital|credit|housing', 'Finance'],
+    ['pharma|medical|health|hospital|diagnostic', 'Healthcare'],
+    ['software|technology|tech|digital|infotech|systems', 'IT'],
+    ['power|energy|oil|gas|petro|coal|solar', 'Energy'],
+    ['steel|metal|aluminium|mining|cement', 'Metals & Mining'],
+    ['motor|auto|tyre|vehicle', 'Auto'],
+    ['telecom|airtel|communication', 'Telecom'],
+    ['food|consumer|fmcg|textile|jewel|retail', 'Consumer'],
+    ['defence|electronics|industrial|engineering|infra', 'Industrial']
+  ]
+  return sectorKeywords.find(([keywords]) => new RegExp(keywords).test(text))?.[1] || 'Other'
+}
+
+const getStockDescription = stock => {
+  const descriptions = {
+    Banking: 'Provides banking, lending, deposit, and related financial services to individuals and businesses.',
+    Finance: 'Operates in financial services such as lending, investment, insurance, or capital markets.',
+    IT: 'Delivers software, technology, digital, or information services to business and consumer clients.',
+    Energy: 'Operates across energy production, distribution, equipment, or related infrastructure.',
+    Auto: 'Designs, manufactures, distributes, or supports vehicles and automotive components.',
+    Telecom: 'Provides telecommunications, connectivity, network, or communications services.',
+    Healthcare: 'Provides healthcare products, pharmaceuticals, diagnostics, or medical services.',
+    Consumer: 'Serves consumer demand through branded products, retail, food, or household services.',
+    'Metals & Mining': 'Operates in mining, metals, steel, cement, or other materials and industrial commodities.',
+    Industrial: 'Provides industrial products, engineering, equipment, infrastructure, or manufacturing services.'
+  }
+  const sector = resolveSector(stock)
+  return `${stock.n || stock.s} is an Indian ${sector.toLowerCase()} company. ${descriptions[sector] || 'Its business and market performance should be reviewed alongside the latest company filings and sector conditions.'}`
+}
+
+const formatChange = value => {
+  const numericValue = Number(value)
+  if (!Number.isFinite(numericValue)) return 'N/A'
+  return numericValue !== 0 && Math.abs(numericValue) < 0.01 ? numericValue.toFixed(3) : numericValue.toFixed(2)
+}
+
 const BROKER_PROFILES = [
-  { name: 'Axis Securities', style: 'Momentum desk', horizon: '1-3 weeks', bias: 1.05 },
-  { name: 'Motilal Oswal', style: 'Swing desk', horizon: '2-6 weeks', bias: 1.1 },
-  { name: 'ICICI Securities', style: 'Trend desk', horizon: '1-3 months', bias: 1 },
-  { name: 'HDFC Securities', style: 'Risk-managed desk', horizon: '2-4 weeks', bias: 0.95 },
-  { name: 'Kotak Securities', style: 'Technical desk', horizon: '1-2 months', bias: 1.08 },
-  { name: 'Sharekhan', style: 'Positional desk', horizon: '1-3 months', bias: 0.98 }
+  { name: 'Axis Securities', url: 'https://www.axisdirect.in/', style: 'Momentum desk', horizon: '1-3 weeks', bias: 1.05 },
+  { name: 'Motilal Oswal', url: 'https://www.motilaloswal.com/', style: 'Swing desk', horizon: '2-6 weeks', bias: 1.1 },
+  { name: 'ICICI Securities', url: 'https://www.icicidirect.com/', style: 'Trend desk', horizon: '1-3 months', bias: 1 },
+  { name: 'HDFC Securities', url: 'https://hdfcsky.com/', style: 'Risk-managed desk', horizon: '2-4 weeks', bias: 0.95 },
+  { name: 'Kotak Securities', url: 'https://www.kotaksecurities.com/', style: 'Technical desk', horizon: '1-2 months', bias: 1.08 },
+  { name: 'Sharekhan', url: 'https://www.sharekhan.com/', style: 'Positional desk', horizon: '1-3 months', bias: 0.98 },
+  { name: 'Upstox', url: 'https://upstox.com/', style: 'Digital investing', horizon: 'Flexible', bias: 1 },
+  { name: 'Zerodha', url: 'https://zerodha.com/', style: 'Self-directed trading', horizon: 'Flexible', bias: 1 }
 ]
 
 const CHART_TIMEFRAMES = {
@@ -503,6 +546,7 @@ function MarketAlerts({ alerts, loading, error }) {
 
 const clampScore = (value) => Math.round(Math.min(100, Math.max(0, value)))
 const getDvmTone = (score = 0) => score >= 55 ? 'green' : score >= 40 ? 'orange' : 'red'
+const getPatternClass = pattern => `${pattern.direction.toLowerCase()} ${pattern.type.toLowerCase().replace(/\s+/g, '-')}`
 const getDvmStatus = (dvm) => {
   if (dvm?.isStrongPerformer) return 'Strong Performer'
   if ((dvm?.score || 0) >= 55) return 'Positive'
@@ -565,7 +609,8 @@ const analyzeStock = async (stock) => {
 
   const currentPrice = Number(meta?.regularMarketPrice ?? closes[closes.length - 1])
   const previousClose = Number(meta?.previousClose ?? closes[closes.length - 2] ?? currentPrice)
-  const change = previousClose ? ((currentPrice - previousClose) / previousClose) * 100 : 0
+  const reportedChange = Number(meta?.regularMarketChangePercent)
+  const change = Number.isFinite(reportedChange) ? reportedChange : previousClose ? ((currentPrice - previousClose) / previousClose) * 100 : 0
   
   const ema9 = calculateEMA(closes, 9)
   const ema20 = calculateEMA(closes, 20)
@@ -621,6 +666,7 @@ const analyzeStock = async (stock) => {
 
   const analysisData = {
     ...stock,
+    sector: resolveSector(stock),
     currentPrice,
     previousClose,
     change,
@@ -761,7 +807,7 @@ function StockAnalysisDashboard() {
       n: rawSymbol,
       symbol,
       c: 'Searched Stock',
-      sector: 'Unclassified'
+      sector: resolveSector({ s: rawSymbol, n: rawSymbol, symbol })
     }
 
     setSearching(true)
@@ -986,73 +1032,6 @@ function StockAnalysisDashboard() {
     setMenu(false)
   }
 
-  const exportExcel = () => {
-    const workbook = XLSX.utils.book_new()
-    const stockRows = items => items.map(stock => ({
-      Symbol: stock.s,
-      Company: stock.n,
-      Sector: stock.sector || '',
-      Category: stock.c || '',
-      Price: stock.currentPrice || '',
-      'Today Change %': stock.change || 0,
-      'Technical Score': stock.technicalScore || 0,
-      'DVM-style Score': stock.dvm?.score || 0,
-      Durability: stock.dvm?.durability || 0,
-      'Valuation Proxy': stock.dvm?.valuation || 0,
-      Momentum: stock.dvm?.momentum || 0,
-      'Strong Performer': stock.dvm?.isStrongPerformer ? 'Yes' : 'No',
-      RSI: stock.rsi || '',
-      Trend: stock.marketStructure?.trend || '',
-      Pattern: stock.pattern?.type || '',
-      'Pattern Direction': stock.pattern?.direction || '',
-      'Intraday Target': stock.intradayTarget || '',
-      'Intraday Stop Loss': stock.intradayStopLoss || '',
-      'Swing Target': stock.swingTarget || '',
-      'Swing Stop Loss': stock.swingStopLoss || ''
-    }))
-    const addSheet = (name, rows, fallback = [{ Status: 'No data available' }]) => {
-      XLSX.utils.book_append_sheet(workbook, XLSX.utils.json_to_sheet(rows.length ? rows : fallback), name)
-    }
-
-    addSheet('Top 50', stockRows(top50))
-    addSheet('Large Cap', stockRows(largeCaps))
-    addSheet('Mid Cap', stockRows(midCaps))
-    addSheet('Small Cap', stockRows(smallCaps))
-    addSheet('Watchlist', stockRows(watchlistStocks))
-    addSheet('Patterns', stockRows([...bullishPatterns, ...bearishPatterns]))
-    addSheet('News Movers', newsMovers.map(({ stock, articles }) => ({
-      ...stockRows([stock])[0],
-      'News Matches': articles.length,
-      'Latest Headline': articles[0]?.title || 'No direct headline match',
-      'Headline Link': articles[0]?.link || ''
-    })))
-    addSheet('Broker Calls', brokerCalls.map(item => ({
-      Symbol: item.stock.s,
-      Company: item.stock.n,
-      Broker: item.broker.name,
-      'Strategy Desk': item.broker.style,
-      Call: item.call,
-      Price: item.stock.currentPrice || '',
-      Target: item.target,
-      'Stop Loss': item.stopLoss,
-      'Expected Upside %': Number(item.upside.toFixed(2)),
-      Horizon: item.broker.horizon,
-      Confidence: item.confidence,
-      Rationale: item.rationale
-    })))
-    addSheet('Dividends', nseDividends.map(dividend => ({
-      Company: dividend.company,
-      Purpose: dividend.purpose,
-      'Ex-Date': dividend.exDate,
-      'Record Date': dividend.recordDate,
-      'Face Value': dividend.faceValue,
-      Published: dividend.publishedAt,
-      Source: dividend.source
-    })))
-
-    XLSX.writeFile(workbook, `stock-pulse-india-${new Date().toISOString().slice(0, 10)}.xlsx`)
-  }
-
   return (
     <div className="app">
       <header className="topbar">
@@ -1072,6 +1051,12 @@ function StockAnalysisDashboard() {
         <div className="top-actions">
           <button className="iconbtn"><Bell size={18} /></button>
           <button className="profile">AI</button>
+          <nav className="topbar-nav" aria-label="Main navigation">
+            <select className="broker-menu" aria-label="Select broker" defaultValue="" onChange={event => { const broker = BROKER_PROFILES.find(item => item.name === event.target.value); if (broker) window.open(broker.url, '_blank', 'noopener,noreferrer'); event.target.value = '' }}>
+              <option value="">🔗 Brokers</option>
+              {BROKER_PROFILES.map(broker => <option value={broker.name} key={broker.name}>{broker.name}</option>)}
+            </select>
+          </nav>
         </div>
       </header>
 
@@ -1097,9 +1082,6 @@ function StockAnalysisDashboard() {
             </form>
             <button className="refresh" onClick={loadAnalysis} disabled={loading}>
               <RefreshCw className={loading ? 'spin' : ''} size={17} /> {loading ? 'Refreshing...' : 'Refresh Analysis'}
-            </button>
-            <button className="export-excel" onClick={exportExcel} disabled={loading && stocks.length === 0}>
-              <Download size={17} /> Download Excel
             </button>
             <button className="refresh" onClick={() => setShowStockList(current => !current)}>
               <Layers3 size={17} /> Stocks ({trackedStocks.length})
@@ -1146,7 +1128,7 @@ function StockAnalysisDashboard() {
             💰 Dividends ({nseDividends.length})
           </button>
           <button className={tab === 'ipos' ? 'active' : ''} onClick={() => setTab('ipos')}>
-            🚀 New IPOs ({ipos.length})
+            🚀 IPOs ({ipos.length})
           </button>
           <button className={tab === 'alerts' ? 'active' : ''} onClick={() => setTab('alerts')}>
             🚨 Alerts ({marketAlerts.length})
@@ -1169,7 +1151,7 @@ function StockAnalysisDashboard() {
           </div>
         )}
 
-        {tab !== 'dividends' && tab !== 'ipos' && tab !== 'news' && tab !== 'brokerCalls' && tab !== 'ai' && tab !== 'alerts' && (
+        {tab !== 'dividends' && tab !== 'ipos' && tab !== 'news' && tab !== 'brokerCalls' && tab !== 'brokers' && tab !== 'ai' && tab !== 'alerts' && (
           <StockSortControls sortConfig={sortConfig} onChange={setSortConfig} />
         )}
 
@@ -1220,11 +1202,11 @@ function StockAnalysisDashboard() {
                           </td>
                           <td className="price">₹{stock.currentPrice?.toFixed(2) || 'N/A'}</td>
                           <td className={stock.change >= 0 ? 'positive' : 'negative'}>
-                            {stock.change >= 0 ? '+' : ''}{stock.change?.toFixed(2)}%
+                            {stock.change >= 0 ? '+' : ''}{formatChange(stock.change)}%
                           </td>
                           <td className="pattern-cell">
                             {stock.pattern ? (
-                              <span className={`pattern-badge ${stock.pattern.direction.toLowerCase()}`}>
+                              <span className={`pattern-badge ${getPatternClass(stock.pattern)}`}>
                                 {stock.pattern.type}
                               </span>
                             ) : 'No Pattern'}
@@ -1253,7 +1235,7 @@ function StockAnalysisDashboard() {
                           </td>
                           <td className="probability-cell"><strong>{calculateProfitProbability(stock, getRelatedNews(stock, newsArticles))}%</strong><small>model estimate</small></td>
                           <td className="row-actions-cell">
-                            <button className="watch-btn" title={watchlistSymbols.includes(stock.symbol) ? 'Remove from watchlist' : 'Add to watchlist'} onClick={event => { event.stopPropagation(); toggleWatchlist(stock) }}>
+                            <button className={`watch-btn ${watchlistSymbols.includes(stock.symbol) ? 'watched' : ''}`} title={watchlistSymbols.includes(stock.symbol) ? 'Remove from watchlist' : 'Add to watchlist'} onClick={event => { event.stopPropagation(); toggleWatchlist(stock) }}>
                               <Star size={14} fill={watchlistSymbols.includes(stock.symbol) ? 'currentColor' : 'none'} />
                             </button>
                             <button className="detail-btn" onClick={() => setSelectedStock(stock)}>
@@ -1327,6 +1309,8 @@ function StockAnalysisDashboard() {
               <BrokerCalls calls={visibleBrokerCalls} onSelect={setSelectedStock} />
             )}
 
+            {tab === 'brokers' && <BrokerDirectory />}
+
             {tab === 'ai' && (
               <AIQueryPanel stocks={stocks} brokerCalls={brokerCalls} newsMovers={newsMovers} onSelect={setSelectedStock} />
             )}
@@ -1364,7 +1348,7 @@ function StockGrid({ stocks, newsArticles, onSelect, watchlistSymbols, onToggleW
       {stocks.map((stock, idx) => (
         <div key={stock.s} className="stock-card" onClick={() => onSelect(stock)}>
           <div className="rank-badge">#{idx + 1}</div>
-          <button className="card-watch-btn" title={watchlistSymbols.includes(stock.symbol) ? 'Remove from watchlist' : 'Add to watchlist'} onClick={event => { event.stopPropagation(); onToggleWatchlist(stock) }}>
+          <button className={`card-watch-btn ${watchlistSymbols.includes(stock.symbol) ? 'watched' : ''}`} title={watchlistSymbols.includes(stock.symbol) ? 'Remove from watchlist' : 'Add to watchlist'} onClick={event => { event.stopPropagation(); onToggleWatchlist(stock) }}>
             <Star size={16} fill={watchlistSymbols.includes(stock.symbol) ? 'currentColor' : 'none'} />
           </button>
           <div className="stock-header">
@@ -1375,7 +1359,7 @@ function StockGrid({ stocks, newsArticles, onSelect, watchlistSymbols, onToggleW
               <span className="card-sector">{stock.sector || 'Other'} sector</span>
             </div>
             <span className={`direction ${stock.change >= 0 ? 'bull' : 'bear'}`}>
-              {stock.change >= 0 ? '↑' : '↓'} {stock.change >= 0 ? '+' : ''}{stock.change?.toFixed(2)}%
+              {stock.change >= 0 ? '↑' : '↓'} {stock.change >= 0 ? '+' : ''}{formatChange(stock.change)}%
             </span>
           </div>
           <div className="price-display">
@@ -1551,7 +1535,7 @@ function IpoCalendar({ ipos, newsArticles, loading, error, onSelect }) {
     <section className="card analysis-section ipo-section">
       <div className="dividend-heading">
         <div>
-          <h2>🚀 NEW IPOs</h2>
+          <h2>🚀 IPOs</h2>
           <p>IPO issues from the last three months, based on NSE data. Click an IPO for full details.</p>
         </div>
         <span className="dividend-count">NSE · {monthlyIpos.length} in 3 months</span>
@@ -1570,7 +1554,7 @@ function IpoCalendar({ ipos, newsArticles, loading, error, onSelect }) {
       ) : (
         <div className="table-wrapper">
           <table className="analysis-table ipo-table">
-            <thead><tr><th>Company</th><th>Type</th><th>Open Date</th><th>Close Date</th><th>Price Band</th><th>Potential Listing</th><th>News Signal</th></tr></thead>
+            <thead><tr><th>Company</th><th>Type</th><th>Open Date</th><th>Close Date</th><th>Price Band</th><th>Potential Listing</th><th>Current Price</th><th>News Signal</th></tr></thead>
             <tbody>{filteredIpos.map((ipo, index) => (
               <tr key={`${ipo.company}-${ipo.openDate}-${index}`} onClick={() => onSelect(ipo)}>
                 <td className="stock-name"><strong>{ipo.company}</strong><small>{ipo.symbol || 'NSE issue'}</small></td>
@@ -1579,6 +1563,7 @@ function IpoCalendar({ ipos, newsArticles, loading, error, onSelect }) {
                 <td>{ipo.closeDate || '—'}</td>
                 <td>{ipo.priceRange}</td>
                 <td className="ipo-estimate">{getIpoListingEstimate(ipo, newsArticles).estimate}</td>
+                <td className="ipo-current-price">{ipo.currentPrice || 'Not available'}</td>
                 <td><span className="sector">{getIpoListingEstimate(ipo, newsArticles).sentiment}</span></td>
               </tr>
             ))}</tbody>
@@ -1596,6 +1581,7 @@ function IpoDetailPanel({ ipo, newsArticles, onClose }) {
     ['Open date', ipo.openDate],
     ['Close date', ipo.closeDate],
     ['Listing date', ipo.listingDate],
+    ['Current price', ipo.currentPrice || 'Not available'],
     ['Price band', ipo.priceRange],
     ['Issue size', ipo.issueSize],
     ['Lot size', ipo.lotSize],
@@ -1743,6 +1729,28 @@ function BrokerCalls({ calls, onSelect }) {
   )
 }
 
+function BrokerDirectory() {
+  return (
+    <section className="card analysis-section broker-directory">
+      <div className="dividend-heading">
+        <div>
+          <h2>🔗 BROKERS</h2>
+          <p>Open an official broker website to sign in or manage your account.</p>
+        </div>
+        <span className="dividend-count">External links</span>
+      </div>
+      <div className="broker-directory-grid">
+        {BROKER_PROFILES.map(broker => (
+          <a className="broker-directory-card" href={broker.url} target="_blank" rel="noreferrer" key={broker.name}>
+            <div><strong>{broker.name}</strong><span>{broker.style}</span></div>
+            <ExternalLink size={16} />
+          </a>
+        ))}
+      </div>
+    </section>
+  )
+}
+
 function NewsMovers({ movers, loading, error, onSelect }) {
   return (
     <section className="card analysis-section news-movers">
@@ -1769,7 +1777,7 @@ function NewsMovers({ movers, loading, error, onSelect }) {
                 <tr key={stock.symbol}>
                   <td className="rank">{index + 1}</td>
                   <td className="stock-name"><button className="news-stock-button" onClick={() => onSelect(stock)}><strong>{stock.s}</strong><small>{stock.n} | {stock.sector || 'Other'}</small></button></td>
-                  <td className={stock.change >= 0 ? 'positive' : 'negative'}>{stock.change >= 0 ? '+' : ''}{stock.change?.toFixed(2)}%</td>
+                  <td className={stock.change >= 0 ? 'positive' : 'negative'}>{stock.change >= 0 ? '+' : ''}{formatChange(stock.change)}%</td>
                   <td><span className="news-count">{articles.length ? `${articles.length} match${articles.length === 1 ? '' : 'es'}` : 'Market mover'}</span></td>
                   <td className="news-headline">{articles[0] ? <a href={articles[0].link} target="_blank" rel="noreferrer">{articles[0].title}</a> : 'No direct headline match'}</td>
                   <td><span className="sector">{stock.c}</span></td>
@@ -1791,7 +1799,7 @@ function PatternGrid({ patterns, onSelect, watchlistSymbols, onToggleWatchlist }
       ) : (
         patterns.map(stock => (
           <div key={stock.s} className="pattern-row" onClick={() => onSelect(stock)}>
-            <button className="pattern-watch-btn" title={watchlistSymbols.includes(stock.symbol) ? 'Remove from watchlist' : 'Add to watchlist'} onClick={event => { event.stopPropagation(); onToggleWatchlist(stock) }}>
+            <button className={`pattern-watch-btn ${watchlistSymbols.includes(stock.symbol) ? 'watched' : ''}`} title={watchlistSymbols.includes(stock.symbol) ? 'Remove from watchlist' : 'Add to watchlist'} onClick={event => { event.stopPropagation(); onToggleWatchlist(stock) }}>
               <Star size={15} fill={watchlistSymbols.includes(stock.symbol) ? 'currentColor' : 'none'} />
             </button>
             <div className="pattern-stock">
@@ -1800,7 +1808,7 @@ function PatternGrid({ patterns, onSelect, watchlistSymbols, onToggleWatchlist }
               <small className="pattern-sector">{stock.sector || 'Other'} sector</small>
             </div>
             <div className="pattern-info-row">
-              <span className={`pattern-type ${stock.pattern.direction.toLowerCase()}`}>
+              <span className={`pattern-type ${getPatternClass(stock.pattern)}`}>
                 {stock.pattern.type}
               </span>
               <span className="pattern-confidence">
@@ -1940,7 +1948,7 @@ function StockDetailPanel({ stock, onClose, isWatched, onToggleWatchlist }) {
           </div>
         </div>
         <div className="panel-actions">
-          <button className="panel-watch-btn" onClick={() => onToggleWatchlist(stock)}>
+          <button className={`panel-watch-btn ${isWatched ? 'watched' : ''}`} onClick={() => onToggleWatchlist(stock)}>
             <Star size={16} fill={isWatched ? 'currentColor' : 'none'} />
             {isWatched ? 'Watching' : 'Add to Watchlist'}
           </button>
@@ -1954,8 +1962,20 @@ function StockDetailPanel({ stock, onClose, isWatched, onToggleWatchlist }) {
             <span>Current Price</span>
             <strong>₹{stock.currentPrice?.toFixed(2)}</strong>
             <span className={stock.change >= 0 ? 'positive' : 'negative'}>
-              {stock.change >= 0 ? '+' : ''}{stock.change?.toFixed(2)}%
+              {stock.change >= 0 ? '+' : ''}{formatChange(stock.change)}%
             </span>
+          </div>
+        </div>
+
+        <div className="stock-summary">
+          <div className="stock-summary-heading"><h3>Stock Summary</h3><span className={`summary-signal ${stock.change >= 0 ? 'positive' : 'negative'}`}>{stock.change >= 0 ? 'Positive day' : 'Negative day'}</span></div>
+          <p className="stock-description"><strong>About the stock:</strong> {getStockDescription(stock)}</p>
+          <p>{stock.s} is showing a {stock.marketStructure?.trend || 'Neutral'} trend with a {stock.pattern?.type || 'Consolidation'} pattern. Intraday bias is {stock.intradayBias || 'Neutral'} and swing bias is {stock.swingBias || 'Neutral'}.</p>
+          <div className="stock-summary-grid">
+            <div><span>Trend</span><strong>{stock.marketStructure?.trend || 'Neutral'}</strong></div>
+            <div><span>Pattern</span><strong>{stock.pattern?.type || 'Consolidation'}</strong></div>
+            <div><span>RSI</span><strong>{Number.isFinite(Number(stock.rsi)) ? stock.rsi.toFixed(1) : 'N/A'}</strong></div>
+            <div><span>Technical score</span><strong>{stock.technicalScore || 0}/100</strong></div>
           </div>
         </div>
 
@@ -2102,7 +2122,7 @@ function StockDetailPanel({ stock, onClose, isWatched, onToggleWatchlist }) {
         {stock.pattern && (
           <div className="pattern-analysis">
             <h3>Chart Pattern</h3>
-            <div className={`pattern-info-full ${stock.pattern.direction.toLowerCase()}`}>
+            <div className={`pattern-info-full ${getPatternClass(stock.pattern)}`}>
               <div className="pattern-type-display">{stock.pattern.type}</div>
               <div className="pattern-details">
                 <span>Direction: <strong>{stock.pattern.direction}</strong></span>
