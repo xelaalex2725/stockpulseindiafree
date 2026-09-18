@@ -206,7 +206,7 @@ export const detectChartPattern = (high, low, close, volume) => {
     const highdiff = Math.abs(recentHighs[1].val - recentHighs[0].val)
     const lowdiff = recentLows[1].val - recentLows[0].val
     
-    if (highdiff < highdiff * 0.02 && lowdiff > 0) {
+    if (highdiff < Math.max(recentHighs[0].val * 0.02, 0.01) && lowdiff > 0) {
       patterns.push({
         type: 'Ascending Triangle',
         direction: 'Bullish',
