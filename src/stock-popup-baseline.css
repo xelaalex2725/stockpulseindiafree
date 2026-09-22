@@ -1,0 +1,229 @@
+.detail-panel .panel-header {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto auto;
+  align-items: center;
+  gap: 18px;
+  min-height: 0;
+  height: auto;
+  padding: 24px;
+  position: sticky;
+  top: 0;
+  background: linear-gradient(110deg, #102746, #1d5684);
+  border-bottom: 1px solid #2c658f;
+  border-radius: 0;
+  box-shadow: none;
+  color: var(--ink);
+  overflow: visible;
+  position: relative;
+}
+
+.detail-panel .panel-header h2 {
+  display: block;
+  margin: 0;
+  font: 700 18px Manrope;
+  color: #fff;
+  white-space: normal;
+  overflow: visible;
+  text-overflow: clip;
+}
+
+.detail-panel .popup-symbol {
+  color: #65ead2;
+}
+
+.detail-panel .popup-company {
+  color: #fff;
+}
+
+.detail-panel .panel-title {
+  min-width: 0;
+  padding: 0;
+}
+
+.detail-panel .panel-name-row {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 10px;
+}
+
+.detail-panel .panel-name-row h2 {
+  min-width: 0;
+}
+
+.detail-panel .tradingview-header-link {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 5px;
+  height: 30px;
+  padding: 0 9px;
+  border: 1px solid #8bb9da;
+  border-radius: 7px;
+  background: rgba(255, 255, 255, .95);
+  color: #154da8;
+  text-decoration: none;
+  font-size: 10px;
+  font-weight: 800;
+  white-space: nowrap;
+}
+
+.detail-panel .tradingview-header-link:hover {
+  background: #eafff9;
+  color: #006e61;
+}
+
+.detail-panel .panel-header p {
+  display: block;
+  margin: 4px 0 0;
+  padding: 0;
+  background: transparent;
+  color: #c6dced;
+  font-size: 12px;
+  font-weight: 400;
+}
+
+.detail-panel .panel-header p::first-letter {
+  color: #65ead2;
+}
+
+.detail-panel .popup-dvm-summary {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 8px;
+  padding: 0;
+  border: 0;
+}
+
+.detail-panel .popup-dvm-summary > strong {
+  padding: 0;
+  background: transparent;
+  color: #fff;
+  font-size: 11px;
+}
+
+.detail-panel .popup-dvm-summary .dvm-status {
+  padding: 5px 8px;
+  border-radius: 6px;
+  background: rgba(255, 255, 255, .14);
+  border: 1px solid rgba(255, 255, 255, .28);
+  color: #fff;
+  font-size: 10px;
+}
+
+.detail-panel .popup-dvm-summary small {
+  display: block;
+  width: auto;
+  flex: 1 1 auto;
+  color: #65ead2;
+  font-size: 10px;
+  white-space: nowrap;
+}
+
+.detail-panel .panel-actions {
+  grid-column: 2;
+  grid-row: 1;
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  justify-content: center;
+  gap: 10px;
+  padding-left: 14px;
+  margin-right: 62px;
+  border-left: 1px solid var(--line);
+}
+
+.detail-panel .panel-actions .tradingview-header-link,
+.detail-panel .panel-actions .panel-watch-btn {
+  width: 146px;
+  height: 30px;
+  min-height: 30px;
+  padding: 0 9px;
+  border: 1px solid #47749d;
+  border-radius: 7px;
+  background: #1769d1;
+  color: #fff;
+  font-size: 10px;
+  font-weight: 800;
+}
+
+.detail-panel .panel-actions .tradingview-header-link:hover,
+.detail-panel .panel-actions .panel-watch-btn:hover,
+.detail-panel .panel-actions .panel-watch-btn.watched {
+  background: #008f78;
+  border-color: #65ead2;
+  color: #fff;
+}
+
+.detail-panel .panel-header > .close-btn {
+  position: absolute;
+  top: 24px;
+  right: 24px;
+  width: 30px;
+  height: 30px;
+  margin: 0;
+  padding: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.detail-panel .panel-watch-btn {
+  width: auto;
+  height: auto;
+  padding: 7px 9px;
+  border: 1px solid #f1d9a9;
+  border-radius: 7px;
+  background: #fff8e9;
+  color: var(--amber);
+  font-size: 10px;
+}
+
+.detail-panel .close-btn {
+  position: static;
+  width: auto;
+  height: auto;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  color: #c6dced;
+  padding: 0;
+}
+
+.detail-panel .panel-brand-art {
+  display: none;
+}
+
+.detail-panel .price-section {
+  background: linear-gradient(135deg, #dcecff, #d9faf2);
+}
+
+.detail-panel .stock-summary,
+.detail-panel .support-resistance,
+.detail-panel .pattern-analysis,
+.detail-panel .market-structure {
+  background: #fff;
+  border-color: #d7e4f0;
+}
+
+@media (max-width: 560px) {
+  .detail-panel .panel-header {
+    grid-template-columns: minmax(0, 1fr) auto;
+  }
+
+  .detail-panel .panel-actions {
+    grid-column: 2;
+    grid-row: 1;
+    padding-left: 10px;
+    margin-right: 40px;
+  }
+
+  .detail-panel .panel-header > .close-btn {
+    top: 20px;
+    right: 20px;
+    margin: 0;
+  }
+}

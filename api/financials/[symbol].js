@@ -25,6 +25,8 @@ export default async function handler(request, response) {
     const annual = name => latest(`annual${name}`)
     const growth = name => { const current = annual(name); const prior = previous(name); return current !== null && prior ? current / prior - 1 : null }
     const revenue = annual('TotalRevenue')
+    const grossProfit = annual('GrossProfit')
+    const pretaxIncome = annual('PretaxIncome')
     const netIncome = annual('NetIncome')
     const equity = annual('StockholdersEquity')
     const assets = annual('TotalAssets')
@@ -39,10 +41,10 @@ export default async function handler(request, response) {
     response.setHeader('Cache-Control', 'public, max-age=900')
     return response.json({
       symbol, updatedAt: new Date().toISOString(), currency: 'INR',
-      valuation: { marketCap, pe: currentPrice && eps ? currentPrice / eps : null, forwardPe: null, priceToBook: null, dividendYield: currentPrice && dividendPerShare ? dividendPerShare / currentPrice : null },
-      performance: { revenue, revenueGrowth: growth('TotalRevenue'), earningsGrowth: growth('NetIncome'), profitMargin: revenue ? netIncome / revenue : null, operatingMargin: revenue ? operatingIncome / revenue : null, returnOnEquity: equity ? netIncome / equity : null, returnOnAssets: assets ? netIncome / assets : null, eps },
-      balanceSheet: { totalCash: null, totalDebt: annual('TotalDebt'), debtToEquity: equity ? annual('TotalDebt') / equity * 100 : null, currentRatio: null, freeCashFlow: annual('FreeCashFlow'), operatingCashFlow: annual('OperatingCashFlow') },
-      latestYear: { netIncome, totalAssets: assets, totalLiabilities: annual('TotalLiabilitiesNetMinorityInterest') }
+      valuation: { marketCap, pe: currentPrice && eps ? currentPrice / eps : null, forwardPe: null, priceToBook: equity && shares && currentPrice ? currentPrice * shares / equity : null, dividendYield: currentPrice && dividendPerShare ? dividendPerShare / currentPrice : null, shares, dividendPerShare },
+      performance: { revenue, grossProfit, operatingIncome, pretaxIncome, revenueGrowth: growth('TotalRevenue'), earningsGrowth: growth('NetIncome'), profitMargin: revenue ? netIncome / revenue : null, grossMargin: revenue ? grossProfit / revenue : null, operatingMargin: revenue ? operatingIncome / revenue : null, returnOnEquity: equity ? netIncome / equity : null, returnOnAssets: assets ? netIncome / assets : null, eps },
+      balanceSheet: { totalCash: null, totalDebt: annual('TotalDebt'), debtToEquity: equity ? annual('TotalDebt') / equity * 100 : null, currentRatio: null, freeCashFlow: annual('FreeCashFlow'), operatingCashFlow: annual('OperatingCashFlow'), equity, assets },
+      latestYear: { netIncome, totalAssets: assets, totalLiabilities: annual('TotalLiabilitiesNetMinorityInterest'), totalEquity: equity }
     })
   } catch (error) {
     console.error(`Error fetching financials for ${symbol}:`, error.message)

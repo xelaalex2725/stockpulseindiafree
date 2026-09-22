@@ -13,6 +13,44 @@ app.get('/health', (req, res) => {
   res.json({ status: 'Server running' })
 })
 
+app.get('/api/stocks', async (req, res) => {
+  try {
+    const [response, bseResponse] = await Promise.all([
+      fetch('https://archives.nseindia.com/content/equities/EQUITY_L.csv', { headers: { 'User-Agent': 'Mozilla/5.0 Stock Pulse India', Accept: 'text/csv' } }),
+      fetch('https://api.bseindia.com/BseIndiaAPI/api/ListofScripData/w?segment=Equity&status=Active', { headers: { 'User-Agent': 'Mozilla/5.0 Stock Pulse India', Accept: 'application/json', Referer: 'https://www.bseindia.com/' } })
+    ])
+    if (!response.ok && !bseResponse.ok) return res.status(502).json({ error: 'NSE and BSE feeds unavailable' })
+    const rows = response.ok ? (await response.text()).split(/\r?\n/).filter(Boolean) : []
+    const parseCsvLine = line => {
+      const fields = []
+      let field = ''
+      let quoted = false
+      for (let index = 0; index < line.length; index += 1) {
+        const character = line[index]
+        const nextCharacter = line[index + 1]
+        if (character === '"' && quoted && nextCharacter === '"') { field += '"'; index += 1 }
+        else if (character === '"') quoted = !quoted
+        else if (character === ',' && !quoted) { fields.push(field.trim()); field = '' }
+        else field += character
+      }
+      fields.push(field.trim())
+      return fields
+    }
+    const nseStocks = rows.slice(1).map(parseCsvLine)
+      .filter(fields => fields[0] && fields[2] === 'EQ' && /^[A-Z0-9&-]+$/.test(fields[0]))
+      .map(fields => ({ s: fields[0], n: fields[1] || fields[0], symbol: `${fields[0]}.NS`, sector: 'Other' }))
+    const bsePayload = bseResponse.ok ? await bseResponse.json() : []
+    const bseStocks = (Array.isArray(bsePayload) ? bsePayload : bsePayload?.Table || bsePayload?.data || [])
+      .filter(item => item?.SCRIP_CD && item?.Scrip_Name && item?.Status !== 'Suspended')
+      .map(item => ({ s: String(item.SCRIP_CD), n: String(item.Scrip_Name).trim(), symbol: `${item.SCRIP_CD}.BO`, sector: 'Other' }))
+    res.set('Cache-Control', 'public, max-age=3600')
+    res.json({ updatedAt: new Date().toISOString(), stocks: [...nseStocks, ...bseStocks] })
+  } catch (error) {
+    console.error('Error fetching NSE stock universe:', error.message)
+    res.status(502).json({ error: 'Unable to reach NSE stock universe' })
+  }
+})
+
 const decodeXml = (value = '') => value
   .replace(/<!\[CDATA\[([\s\S]*?)\]\]>/g, '$1')
   .replace(/&amp;/g, '&').replace(/&lt;/g, '<').replace(/&gt;/g, '>')
@@ -249,6 +287,8 @@ app.get('/api/financials/:symbol', async (req, res) => {
     const annual = name => latest(`annual${name}`)
     const growth = name => { const current = annual(name); const prior = previous(name); return current !== null && prior ? current / prior - 1 : null }
     const revenue = annual('TotalRevenue')
+    const grossProfit = annual('GrossProfit')
+    const pretaxIncome = annual('PretaxIncome')
     const netIncome = annual('NetIncome')
     const equity = annual('StockholdersEquity')
     const assets = annual('TotalAssets')
@@ -265,10 +305,10 @@ app.get('/api/financials/:symbol', async (req, res) => {
       symbol,
       updatedAt: new Date().toISOString(),
       currency: 'INR',
-      valuation: { marketCap, pe: currentPrice && eps ? currentPrice / eps : null, forwardPe: null, priceToBook: null, dividendYield: currentPrice && dividendPerShare ? dividendPerShare / currentPrice : null },
-      performance: { revenue, revenueGrowth: growth('TotalRevenue'), earningsGrowth: growth('NetIncome'), profitMargin: revenue ? netIncome / revenue : null, operatingMargin: revenue ? operatingIncome / revenue : null, returnOnEquity: equity ? netIncome / equity : null, returnOnAssets: assets ? netIncome / assets : null, eps },
-      balanceSheet: { totalCash: null, totalDebt: annual('TotalDebt'), debtToEquity: equity ? annual('TotalDebt') / equity * 100 : null, currentRatio: null, freeCashFlow: annual('FreeCashFlow'), operatingCashFlow: annual('OperatingCashFlow') },
-      latestYear: { netIncome, totalAssets: assets, totalLiabilities: annual('TotalLiabilitiesNetMinorityInterest') }
+      valuation: { marketCap, pe: currentPrice && eps ? currentPrice / eps : null, forwardPe: null, priceToBook: equity && shares && currentPrice ? currentPrice * shares / equity : null, dividendYield: currentPrice && dividendPerShare ? dividendPerShare / currentPrice : null, shares, dividendPerShare },
+      performance: { revenue, grossProfit, operatingIncome, pretaxIncome, revenueGrowth: growth('TotalRevenue'), earningsGrowth: growth('NetIncome'), profitMargin: revenue ? netIncome / revenue : null, grossMargin: revenue ? grossProfit / revenue : null, operatingMargin: revenue ? operatingIncome / revenue : null, returnOnEquity: equity ? netIncome / equity : null, returnOnAssets: assets ? netIncome / assets : null, eps },
+      balanceSheet: { totalCash: null, totalDebt: annual('TotalDebt'), debtToEquity: equity ? annual('TotalDebt') / equity * 100 : null, currentRatio: null, freeCashFlow: annual('FreeCashFlow'), operatingCashFlow: annual('OperatingCashFlow'), equity, assets },
+      latestYear: { netIncome, totalAssets: assets, totalLiabilities: annual('TotalLiabilitiesNetMinorityInterest'), totalEquity: equity }
     })
   } catch (error) {
     console.error(`Error fetching financials for ${symbol}:`, error.message)
