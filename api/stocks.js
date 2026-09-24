@@ -25,25 +25,28 @@ const parseCsvLine = (line) => {
 
 export default async function handler(request, response) {
   try {
-    const [sourceResponse, bseResponse] = await Promise.all([
+    const [sourceResponse, bseResponse, industryResponse] = await Promise.all([
       fetch('https://archives.nseindia.com/content/equities/EQUITY_L.csv', { headers: { 'User-Agent': 'Mozilla/5.0 Stock Pulse India', Accept: 'text/csv' } }),
-      fetch('https://api.bseindia.com/BseIndiaAPI/api/ListofScripData/w?segment=Equity&status=Active', { headers: { 'User-Agent': 'Mozilla/5.0 Stock Pulse India', Accept: 'application/json', Referer: 'https://www.bseindia.com/' } })
+      fetch('https://api.bseindia.com/BseIndiaAPI/api/ListofScripData/w?segment=Equity&status=Active', { headers: { 'User-Agent': 'Mozilla/5.0 Stock Pulse India', Accept: 'application/json', Referer: 'https://www.bseindia.com/' } }),
+      fetch('https://archives.nseindia.com/content/indices/ind_nifty500list.csv', { headers: { 'User-Agent': 'Mozilla/5.0 Stock Pulse India', Accept: 'text/csv' } })
     ])
     if (!sourceResponse.ok && !bseResponse.ok) return response.status(502).json({ error: 'NSE and BSE feeds unavailable' })
 
     const rows = sourceResponse.ok ? (await sourceResponse.text()).split(/\r?\n/).filter(Boolean) : []
+    const industryRows = industryResponse.ok ? (await industryResponse.text()).split(/\r?\n/).filter(Boolean) : []
+    const industryBySymbol = new Map(industryRows.slice(1).map(parseCsvLine).filter(fields => fields[1] && fields[2]).map(fields => [fields[2], fields[1]]))
     const nseSymbols = rows.slice(1).map(parseCsvLine)
       .filter(fields => fields[0] && fields[2] === 'EQ' && /^[A-Z0-9&-]+$/.test(fields[0]))
       .map(fields => ({
         s: fields[0],
         n: fields[1] || fields[0],
         symbol: `${fields[0]}.NS`,
-        sector: 'Other'
+        sector: industryBySymbol.get(fields[0]) || 'Unclassified'
       }))
     const bsePayload = bseResponse.ok ? await bseResponse.json() : []
     const bseSymbols = (Array.isArray(bsePayload) ? bsePayload : bsePayload?.Table || bsePayload?.data || [])
       .filter(item => item?.SCRIP_CD && item?.Scrip_Name && item?.Status !== 'Suspended')
-      .map(item => ({ s: String(item.SCRIP_CD), n: String(item.Scrip_Name).trim(), symbol: `${item.SCRIP_CD}.BO`, sector: 'Other' }))
+      .map(item => ({ s: String(item.SCRIP_CD), n: String(item.Scrip_Name).trim(), symbol: `${item.SCRIP_CD}.BO`, sector: 'Unclassified' }))
 
     response.setHeader('Cache-Control', 's-maxage=3600, stale-while-revalidate=7200')
     return response.status(200).json({ updatedAt: new Date().toISOString(), stocks: [...nseSymbols, ...bseSymbols] })

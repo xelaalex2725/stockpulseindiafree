@@ -1,12 +1,14 @@
 import React, { useEffect, useMemo, useState } from 'react'
 import { createRoot } from 'react-dom/client'
+import { jsPDF } from 'jspdf'
+import autoTable from 'jspdf-autotable'
 import {
   BarChart3, Bell, BookOpen, ExternalLink, Gauge, Globe2, Layers3, LineChart,
   Menu, Newspaper, RefreshCw, Search, ShieldCheck, Sparkles, Star, TrendingDown, TrendingUp, X,
-  AlertCircle, CheckCircle, Zap, Activity, Send, Bot
+  AlertCircle, CheckCircle, Zap, Activity, Send, Bot, Download
 } from 'lucide-react'
 import { ResponsiveContainer, BarChart, Bar, Brush, XAxis, YAxis, Tooltip, Line } from 'recharts'
-import { calculateEMA, calculateSMA, calculateRSI, calculateMACD, calculateADX, calculateVWAP, detectChartPattern, calculateMarketStructure, calculateSuportResistance, calculateVolumAnalysis, scoreSetup } from './technicalAnalysis'
+import { calculateEMA, calculateSMA, calculateRSI, calculateMACD, calculateADX, calculateATR, calculateVWAP, detectChartPattern, calculateMarketStructure, calculateSuportResistance, calculateVolumAnalysis, calculateRiskLevels, scoreSetup } from './technicalAnalysis'
 import './styles.css'
 import './financials.css'
 import './stock-popup-baseline.css'
@@ -334,39 +336,92 @@ const MAX_ANALYSIS_STOCKS = 1000
 const ANALYSIS_CONCURRENCY = 8
 
 const resolveSector = stock => {
-  if (stock.sector && stock.sector !== 'Unclassified') return stock.sector
+  const symbol = String(stock.symbol || stock.s || '').toUpperCase()
+  if (symbol === 'FILATEX' || symbol === 'FILATEX.NS') return 'Textiles'
+  if (stock.sector && !['Other', 'Unclassified'].includes(stock.sector)) return stock.sector
   const configuredStock = STOCK_CONFIG.find(item => item.symbol === stock.symbol || item.s === stock.s)
   if (configuredStock?.sector) return configuredStock.sector
   const text = `${stock.s || ''} ${stock.n || ''}`.toLowerCase()
   const sectorKeywords = [
-    ['bank|finance|financial|capital|credit|housing', 'Finance'],
+    ['bank', 'Banking'],
+    ['insurance|life insurance|general insurance', 'Insurance'],
+    ['finance|financial|capital|credit|housing|invest', 'Finance'],
     ['pharma|medical|health|hospital|diagnostic', 'Healthcare'],
     ['software|technology|tech|digital|infotech|systems', 'IT'],
     ['power|energy|oil|gas|petro|coal|solar', 'Energy'],
     ['steel|metal|aluminium|mining|cement', 'Metals & Mining'],
+    ['chemical|specialit|fertilizer|agri|pesticide', 'Chemicals'],
+    ['textile|synthetic yarn|fabric|garment|apparel|spinning', 'Textiles'],
     ['motor|auto|tyre|vehicle', 'Auto'],
     ['telecom|airtel|communication', 'Telecom'],
-    ['food|consumer|fmcg|textile|jewel|retail', 'Consumer'],
+    ['realty|real estate|properties|developer', 'Realty'],
+    ['media|broadcast|entertainment|film', 'Media'],
+    ['hotel|hospitality|tourism|travel|aviation|airline', 'Travel & Hospitality'],
+    ['food|consumer|fmcg|jewel|retail', 'Consumer'],
     ['defence|electronics|industrial|engineering|infra', 'Industrial']
   ]
-  return sectorKeywords.find(([keywords]) => new RegExp(keywords).test(text))?.[1] || 'Other'
+  return sectorKeywords.find(([keywords]) => new RegExp(keywords).test(text))?.[1] || 'Unclassified'
 }
 
 const getStockDescription = stock => {
+  const profiles = {
+    FILATEX: 'Filatex India Limited manufactures synthetic textile yarns, including polyester-based yarns, used by downstream textile and fabric manufacturers.'
+  }
+  const symbol = String(stock.symbol || stock.s || '').toUpperCase().replace(/\.(NS|BO)$/, '')
+  if (profiles[symbol]) return profiles[symbol]
+
   const descriptions = {
     Banking: 'Provides banking, lending, deposit, and related financial services to individuals and businesses.',
     Finance: 'Operates in financial services such as lending, investment, insurance, or capital markets.',
+    'Financial Services': 'Provides financial products and services such as lending, investment, insurance, or capital markets.',
     IT: 'Delivers software, technology, digital, or information services to business and consumer clients.',
+    'Information Technology': 'Delivers software, technology, digital, or information services to business and consumer clients.',
     Energy: 'Operates across energy production, distribution, equipment, or related infrastructure.',
+    'Oil Gas & Consumable Fuels': 'Operates across oil, gas, refining, fuel distribution, or related energy infrastructure.',
     Auto: 'Designs, manufactures, distributes, or supports vehicles and automotive components.',
+    'Automobile and Auto Components': 'Designs, manufactures, distributes, or supports vehicles and automotive components.',
     Telecom: 'Provides telecommunications, connectivity, network, or communications services.',
+    Telecommunication: 'Provides telecommunications, connectivity, network, or communications services.',
     Healthcare: 'Provides healthcare products, pharmaceuticals, diagnostics, or medical services.',
+    Pharmaceuticals: 'Develops, manufactures, or markets pharmaceutical and healthcare products.',
     Consumer: 'Serves consumer demand through branded products, retail, food, or household services.',
+    Textiles: 'Operates in textile manufacturing, yarn, fabric, apparel, or other textile-related products.',
+    'Consumer Durables': 'Makes durable consumer products and household or lifestyle equipment.',
+    'Fast Moving Consumer Goods': 'Makes and distributes frequently purchased consumer, food, household, or personal-care products.',
+    'Food Beverage Tobacco': 'Produces or distributes food, beverage, or tobacco products.',
+    Retail: 'Sells products and services directly to consumers through organised or specialised retail channels.',
+    Chemicals: 'Manufactures and distributes industrial, specialty, agricultural, or consumer chemicals.',
+    Construction: 'Develops, builds, or manages construction and infrastructure projects.',
+    'Construction Materials': 'Manufactures materials used in construction, buildings, and infrastructure.',
+    Capital: 'Manufactures industrial equipment, machinery, electrical goods, or other capital products.',
+    'Capital Goods': 'Manufactures industrial equipment, machinery, electrical goods, or other capital products.',
     'Metals & Mining': 'Operates in mining, metals, steel, cement, or other materials and industrial commodities.',
+    'Metals & Minerals': 'Operates in mining, metals, steel, or other mineral and industrial commodities.',
+    Power: 'Generates, transmits, distributes, or supplies electricity and related power services.',
+    Realty: 'Develops, owns, leases, or manages residential, commercial, or other real-estate assets.',
+    'Media Entertainment & Publication': 'Creates, broadcasts, publishes, or distributes media and entertainment content.',
+    Media: 'Creates, broadcasts, publishes, or distributes media and entertainment content.',
+    Services: 'Provides business, consumer, logistics, professional, or other service activities.',
+    'Travel & Hospitality': 'Provides travel, hotel, hospitality, tourism, or aviation-related services.',
     Industrial: 'Provides industrial products, engineering, equipment, infrastructure, or manufacturing services.'
   }
   const sector = resolveSector(stock)
-  return `${stock.n || stock.s} is an Indian ${sector.toLowerCase()} company. ${descriptions[sector] || 'Its business and market performance should be reviewed alongside the latest company filings and sector conditions.'}`
+  const description = descriptions[sector] || descriptions[Object.keys(descriptions).find(key => sector.toLowerCase().includes(key.toLowerCase()))]
+  return `${stock.n || stock.s} is classified in the ${sector.toLowerCase()} sector. ${description || 'Its business details should be confirmed from the latest exchange filings and annual report.'}`
+}
+
+const getStockSummary = stock => {
+  const name = stock.n || stock.s || 'This stock'
+  const sector = resolveSector(stock)
+  const trend = stock.marketStructure?.trend || 'Neutral'
+  const pattern = stock.pattern?.type || 'Consolidation'
+  const intradayBias = stock.intradayBias || 'Neutral'
+  const swingBias = stock.swingBias || 'Neutral'
+  const pricePosition = Number.isFinite(Number(stock.currentPrice)) && Number.isFinite(Number(stock.vwap))
+    ? Number(stock.currentPrice) >= Number(stock.vwap) ? 'above' : 'below'
+    : null
+  const vwapText = pricePosition ? ` Price is ${pricePosition} VWAP.` : ''
+  return `${name} is a ${sector.toLowerCase()} stock. The current technical setup shows a ${trend.toLowerCase()} trend with a ${pattern.toLowerCase()} pattern. Intraday bias is ${intradayBias.toLowerCase()} and swing bias is ${swingBias.toLowerCase()}.${vwapText}`
 }
 
 const formatChange = value => {
@@ -497,7 +552,12 @@ const fetchFinancials = async (symbol) => {
 }
 
 const formatFinancialNumber = (value, options = {}) => {
-  if (!Number.isFinite(Number(value))) return 'N/A'
+  if (value === null || value === undefined || value === '' || !Number.isFinite(Number(value))) {
+    const { percent = false, currency = false } = options
+    if (percent) return '0.0%'
+    if (currency) return '₹0'
+    return '0'
+  }
   const { percent = false, currency = false } = options
   if (percent) return `${(Number(value) * 100).toFixed(1)}%`
   if (currency) return `₹${new Intl.NumberFormat('en-IN', { notation: 'compact', maximumFractionDigits: 1 }).format(Number(value))}`
@@ -653,13 +713,17 @@ const calculateDvmScore = ({ currentPrice, high52, low52, change, rsi, macd, sig
 }
 
 const analyzeStock = async (stock) => {
-  const data = await fetchHistoricalData(stock.symbol)
+  const [data, intradayData] = await Promise.all([
+    fetchHistoricalData(stock.symbol),
+    fetchHistoricalData(stock.symbol, '1d', '5m')
+  ])
   if (!data) return null
   
   const { closes, highs, lows, volumes, meta, dividends } = data
   if (!closes || closes.length < 30) return null
 
-  const currentPrice = Number(meta?.regularMarketPrice ?? closes[closes.length - 1])
+  const livePrice = Number(intradayData?.meta?.regularMarketPrice)
+  const currentPrice = Number.isFinite(livePrice) && livePrice > 0 ? livePrice : Number(meta?.regularMarketPrice ?? closes[closes.length - 1])
   const previousClose = Number(meta?.previousClose ?? closes[closes.length - 2] ?? currentPrice)
   const reportedChange = Number(meta?.regularMarketChangePercent)
   const change = Number.isFinite(reportedChange) ? reportedChange : previousClose ? ((currentPrice - previousClose) / previousClose) * 100 : 0
@@ -672,6 +736,7 @@ const analyzeStock = async (stock) => {
   const { macd, signal, histogram } = calculateMACD(closes)
   const vwap = calculateVWAP(highs, lows, closes, volumes)
   const { adx } = calculateADX(highs, lows, closes, 14)
+  const atr = calculateATR(highs, lows, closes, 14)
   const { support, resistance, pivot } = calculateSuportResistance(highs, lows, closes)
   const volAnalysis = calculateVolumAnalysis(volumes, closes)
   const structure = calculateMarketStructure(highs, lows, closes)
@@ -693,6 +758,13 @@ const analyzeStock = async (stock) => {
   const latestEma20 = Number(ema20[ema20.length - 1] ?? currentPrice)
   const latestEma50 = Number(ema50[ema50.length - 1] ?? currentPrice)
   const latestEma200 = Number(ema200[ema200.length - 1] ?? currentPrice)
+  const liveRsiValues = intradayData ? calculateRSI(intradayData.closes, 14) : []
+  const liveMacdValues = intradayData ? calculateMACD(intradayData.closes) : { macd: [], signal: [] }
+  const liveVwapValues = intradayData ? calculateVWAP(intradayData.highs, intradayData.lows, intradayData.closes, intradayData.volumes) : []
+  const liveRsi = Number(liveRsiValues.at(-1) ?? latestRsi)
+  const liveMacd = Number(liveMacdValues.macd.at(-1) ?? latestMacd)
+  const liveSignal = Number(liveMacdValues.signal.at(-1) ?? latestSignal)
+  const liveVwap = Number(liveVwapValues.at(-1) ?? latestVwap)
   const dma20 = calculateSMA(closes, 20).at(-1) ?? currentPrice
   const dma50 = calculateSMA(closes, 50).at(-1) ?? currentPrice
   const dma200 = calculateSMA(closes, 200).at(-1) ?? currentPrice
@@ -712,16 +784,25 @@ const analyzeStock = async (stock) => {
   const currentVolume = volumes[volumes.length - 1]
   const averageTradedValue = closes.slice(-20).reduce((total, close, index) => total + close * volumes.slice(-20)[index], 0) / Math.min(20, closes.slice(-20).length)
 
-  const intradayBias = currentPrice > latestVwap && latestRsi > 55 && latestRsi < 70 && latestMacd > latestSignal ? 'Bullish' :
-    currentPrice < latestVwap && latestRsi < 45 ? 'Bearish' : 'Neutral'
+  const intradayBias = currentPrice > liveVwap && liveRsi > 55 && liveRsi < 70 && liveMacd > liveSignal ? 'Bullish' :
+    currentPrice < liveVwap && liveRsi < 45 ? 'Bearish' : 'Neutral'
 
   const swingBias = latestEma20 > latestEma50 && latestEma50 > latestEma200 && latestAdx > 25 ? 'Bullish' :
     latestEma20 < latestEma50 && latestEma50 < latestEma200 ? 'Bearish' : 'Neutral'
 
-  const intradayStopLoss = Number(Math.min(support, currentPrice) * 0.985 || currentPrice * 0.985)
-  const intradayTarget = Number((currentPrice + Math.max(0.015, (currentPrice - intradayStopLoss) * 1.8)).toFixed(2))
-  const swingStopLoss = Number((support * 0.96 || currentPrice * 0.96).toFixed(2))
-  const swingTarget = Number((currentPrice + Math.max(0.02, (currentPrice - swingStopLoss) * 2.2)).toFixed(2))
+  const latestAtr = Number(atr.at(-1) ?? currentPrice * 0.015)
+  const liveHighs = intradayData?.highs?.filter(value => Number.isFinite(Number(value)) && Number(value) > 0) || []
+  const liveLows = intradayData?.lows?.filter(value => Number.isFinite(Number(value)) && Number(value) > 0) || []
+  const liveHigh = liveHighs.length ? Math.max(...liveHighs) : resistance
+  const liveLow = liveLows.length ? Math.min(...liveLows) : support
+  const liveAtrValues = intradayData ? calculateATR(intradayData.highs, intradayData.lows, intradayData.closes, 14) : []
+  const intradayAtr = Number(liveAtrValues.at(-1) ?? latestAtr)
+  const intradayLevels = calculateRiskLevels({ currentPrice, support: liveLow, resistance: liveHigh, atr: intradayAtr, bias: intradayBias })
+  const swingLevels = calculateRiskLevels({ currentPrice, support, resistance, atr: latestAtr * 1.5, bias: swingBias })
+  const intradayStopLoss = intradayLevels.stopLoss
+  const intradayTarget = intradayLevels.target
+  const swingStopLoss = swingLevels.stopLoss
+  const swingTarget = swingLevels.target
   const intradayProfitZone = Math.max(currentPrice, intradayTarget)
   const swingProfitZone = Math.max(currentPrice, swingTarget)
 
@@ -744,6 +825,12 @@ const analyzeStock = async (stock) => {
     macdHistogram: latestMacdHistogram,
     vwap: latestVwap,
     adx: latestAdx,
+    atr: latestAtr,
+    intradayAtr,
+    intradaySessionHigh: liveHigh,
+    intradaySessionLow: liveLow,
+    intradayVwap: liveVwap,
+    intradayRsi: liveRsi,
     support,
     resistance,
     pivot,
@@ -769,7 +856,9 @@ const analyzeStock = async (stock) => {
     intradayTarget,
     intradayStopLoss,
     swingTarget,
-    swingStopLoss
+    swingStopLoss,
+    intradayRiskDirection: intradayLevels.direction,
+    swingRiskDirection: swingLevels.direction
   }
   
   const technicalScreenerPass = Object.entries(getScreenerCheck(analysisData)).filter(([key]) => key !== 'marketCap').every(([, passes]) => passes)
@@ -1348,7 +1437,7 @@ function StockAnalysisDashboard() {
                             </span>
                             <div className="stock-tags">
                               <span className="category">{stock.c}</span>
-                              <span className="sector">{stock.sector || 'Other'}</span>
+                              <span className="sector">{resolveSector(stock)}</span>
                             </div>
                           </td>
                           <td className="price">₹{stock.currentPrice?.toFixed(2) || 'N/A'}</td>
@@ -1492,7 +1581,7 @@ function StockAnalysisDashboard() {
               <MarketAlerts alerts={marketAlerts} loading={alertsLoading} error={alertsError} />
             )}
 
-            {selectedStock && <StockDetailPanel stock={selectedStock} onClose={() => setSelectedStock(null)} isWatched={watchlistSymbols.includes(selectedStock.symbol)} onToggleWatchlist={toggleWatchlist} />}
+            {selectedStock && <StockDetailPanel stock={selectedStock} newsArticles={newsArticles} onClose={() => setSelectedStock(null)} isWatched={watchlistSymbols.includes(selectedStock.symbol)} onToggleWatchlist={toggleWatchlist} />}
             {selectedIpo && <IpoDetailPanel ipo={selectedIpo} newsArticles={newsArticles} onClose={() => setSelectedIpo(null)} />}
           </>
         )}
@@ -1521,7 +1610,7 @@ function StockGrid({ stocks, newsArticles, onSelect, watchlistSymbols, onToggleW
               <h3>{stock.s}</h3>
               <p>{stock.n}</p>
               <span className={`dvm-badge ${getDvmTone(stock.dvm?.score)}`}>DVM {stock.dvm?.score || 0}</span>
-              <span className="card-sector">{stock.sector || 'Other'} sector</span>
+              <span className="card-sector">{resolveSector(stock)} sector</span>
             </div>
             <span className={`direction ${stock.change >= 0 ? 'bull' : 'bear'}`}>
               {stock.change >= 0 ? '↑' : '↓'} {stock.change >= 0 ? '+' : ''}{formatChange(stock.change)}%
@@ -1596,7 +1685,7 @@ function StockSortControls({ sortConfig, onChange }) {
   return (
     <div className="stock-sort-controls">
       <span>Sort stocks by</span>
-      <select value={sortConfig.key} onChange={event => onChange({ ...sortConfig, key: event.target.value })} aria-label="Sort stocks by">
+      <select value={sortConfig.key} onChange={event => onChange({ key: event.target.value, direction: 'asc' })} aria-label="Sort stocks by">
         {sortOptions.map(option => <option key={option.value} value={option.value}>{option.label}</option>)}
       </select>
       <button onClick={() => onChange({ ...sortConfig, direction: sortConfig.direction === 'asc' ? 'desc' : 'asc' })}>
@@ -1880,7 +1969,7 @@ function BrokerCalls({ calls, onSelect }) {
   }), [calls, sortConfig])
   const requestSort = key => setSortConfig(current => ({
     key,
-    direction: current.key === key && current.direction === 'desc' ? 'asc' : 'desc'
+    direction: current.key === key ? (current.direction === 'desc' ? 'asc' : 'desc') : 'asc'
   }))
   const sortIndicator = key => sortConfig.key === key ? (sortConfig.direction === 'asc' ? '↑' : '↓') : '↕'
 
@@ -1905,7 +1994,6 @@ function BrokerCalls({ calls, onSelect }) {
                 <th><button className="sort-header" onClick={() => requestSort('stock')}>Stock <span>{sortIndicator('stock')}</span></button></th>
                 <th>Broker desk</th>
                 <th><button className="sort-header" onClick={() => requestSort('call')}>Call <span>{sortIndicator('call')}</span></button></th>
-                <th>Recommendation</th>
                 <th><button className="sort-header" onClick={() => requestSort('date')}>Signal date <span>{sortIndicator('date')}</span></button></th>
                 <th>Current price</th>
                 <th><button className="sort-header" onClick={() => requestSort('target')}>Target <span>{sortIndicator('target')}</span></button></th>
@@ -1919,10 +2007,9 @@ function BrokerCalls({ calls, onSelect }) {
               {sortedCalls.map((item, index) => (
                 <tr key={`${item.stock.symbol}-${item.broker.name}`} onClick={() => onSelect(item.stock)}>
                   <td className="rank">{index + 1}</td>
-                  <td className="stock-name"><strong>{item.stock.s}</strong><small>{item.stock.n} | {item.stock.sector || 'Other'}</small></td>
+                  <td className="stock-name"><strong>{item.stock.s}</strong><small>{item.stock.n}</small></td>
                   <td><strong>{item.broker.name}</strong><small className="broker-style">{item.broker.style}</small></td>
                   <td><span className={`broker-call ${item.call.toLowerCase()}`}>{item.call}</span></td>
-                  <td><strong>{item.recommendation}</strong><small className="broker-style">{item.rationale}</small></td>
                   <td>{item.recommendationDate ? new Date(item.recommendationDate).toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' }) : '—'}</td>
                   <td>₹{item.stock.currentPrice?.toFixed(2)}</td>
                   <td className="positive">₹{item.target.toFixed(2)}</td>
@@ -1963,6 +2050,25 @@ function BrokerDirectory() {
 }
 
 function NewsMovers({ movers, loading, error, onSelect }) {
+  const [sortConfig, setSortConfig] = useState({ key: 'change', direction: 'desc' })
+  const sortedMovers = useMemo(() => [...movers].sort((first, second) => {
+    const valueFor = item => {
+      if (sortConfig.key === 'stock') return item.stock.n || item.stock.s
+      if (sortConfig.key === 'news') return item.articles.length
+      if (sortConfig.key === 'sector') return resolveSector(item.stock)
+      return Number(item.stock.change || 0)
+    }
+    const firstValue = valueFor(first)
+    const secondValue = valueFor(second)
+    const result = typeof firstValue === 'string' ? firstValue.localeCompare(secondValue) : firstValue - secondValue
+    return sortConfig.direction === 'asc' ? result : -result
+  }), [movers, sortConfig])
+  const requestSort = key => setSortConfig(current => ({
+    key,
+    direction: current.key === key ? (current.direction === 'desc' ? 'asc' : 'desc') : 'asc'
+  }))
+  const sortIndicator = key => sortConfig.key === key ? (sortConfig.direction === 'asc' ? '↑' : '↓') : '↕'
+
   return (
     <section className="card analysis-section news-movers">
       <div className="dividend-heading">
@@ -1981,13 +2087,20 @@ function NewsMovers({ movers, loading, error, onSelect }) {
         <div className="table-wrapper">
           <table className="analysis-table">
             <thead>
-              <tr><th>Rank</th><th>Stock</th><th>Today</th><th>News</th><th>Latest headline</th><th>Action</th></tr>
+              <tr>
+                <th>Rank</th>
+                <th><button className="sort-header" onClick={() => requestSort('stock')}>Stock <span>{sortIndicator('stock')}</span></button></th>
+                <th><button className="sort-header" onClick={() => requestSort('change')}>Today <span>{sortIndicator('change')}</span></button></th>
+                <th><button className="sort-header" onClick={() => requestSort('news')}>News <span>{sortIndicator('news')}</span></button></th>
+                <th>Latest headline</th>
+                <th><button className="sort-header" onClick={() => requestSort('sector')}>Sector <span>{sortIndicator('sector')}</span></button></th>
+              </tr>
             </thead>
             <tbody>
-              {movers.map(({ stock, articles }, index) => (
+              {sortedMovers.map(({ stock, articles }, index) => (
                 <tr key={stock.symbol}>
                   <td className="rank">{index + 1}</td>
-                  <td className="stock-name"><button className="news-stock-button" onClick={() => onSelect(stock)}><strong>{stock.s}</strong><small>{stock.n} | {stock.sector || 'Other'}</small></button></td>
+                  <td className="stock-name"><button className="news-stock-button" onClick={() => onSelect(stock)}><strong>{stock.s}</strong><small>{stock.n} | {resolveSector(stock)}</small></button></td>
                   <td className={stock.change >= 0 ? 'positive' : 'negative'}>{stock.change >= 0 ? '+' : ''}{formatChange(stock.change)}%</td>
                   <td><span className="news-count">{articles.length ? `${articles.length} match${articles.length === 1 ? '' : 'es'}` : 'Market mover'}</span></td>
                   <td className="news-headline">{articles[0] ? <a href={articles[0].link} target="_blank" rel="noreferrer">{articles[0].title}</a> : 'No direct headline match'}</td>
@@ -2016,7 +2129,7 @@ function PatternGrid({ patterns, onSelect, watchlistSymbols, onToggleWatchlist }
             <div className="pattern-stock">
               <strong>{stock.s}</strong>
               <span>{stock.n}</span>
-              <small className="pattern-sector">{stock.sector || 'Other'} sector</small>
+              <small className="pattern-sector">{resolveSector(stock)} sector</small>
             </div>
             <div className="pattern-info-row">
               <span className={`pattern-type ${getPatternClass(stock.pattern)}`}>
@@ -2110,7 +2223,7 @@ function FinancialsSection({ financials }) {
   )
 }
 
-function StockDetailPanel({ stock, onClose, isWatched, onToggleWatchlist }) {
+function StockDetailPanel({ stock, newsArticles, onClose, isWatched, onToggleWatchlist }) {
   const [selectedTimeframe, setSelectedTimeframe] = useState('oneYear')
   const [chartData, setChartData] = useState([])
   const [chartLoading, setChartLoading] = useState(true)
@@ -2172,6 +2285,166 @@ function StockDetailPanel({ stock, onClose, isWatched, onToggleWatchlist }) {
   }
 
   const prosCons = getStockProsCons(stock, financials)
+  const relatedNews = getRelatedNews(stock, newsArticles || [])
+  const downloadStockReport = () => {
+    const doc = new jsPDF({ unit: 'pt', format: 'a4' })
+    const margin = 36
+    const reportValue = value => value === null || value === undefined || value === '' || !Number.isFinite(Number(value)) ? '0' : Number(value).toLocaleString('en-IN', { maximumFractionDigits: 2 })
+    const reportPercent = value => `${reportValue(Number(value) * 100)}%`
+    const addSection = (title, rows, color = [23, 32, 51]) => {
+      autoTable(doc, {
+        startY: doc.lastAutoTable?.finalY ? doc.lastAutoTable.finalY + 16 : 180,
+        head: [[title, 'Value']],
+        body: rows,
+        theme: 'grid',
+        headStyles: { fillColor: color, textColor: 255, fontSize: 9 },
+        bodyStyles: { fontSize: 8, textColor: [40, 50, 70] },
+        alternateRowStyles: { fillColor: [246, 249, 253] },
+        columnStyles: { 0: { cellWidth: 190 }, 1: { cellWidth: 330 } },
+        margin: { left: margin, right: margin }
+      })
+    }
+
+    doc.setFontSize(18)
+    doc.setTextColor(23, 32, 51)
+    doc.text(`${stock.s} - ${stock.n}`, margin, 42)
+    doc.setFontSize(9)
+    doc.setTextColor(100, 112, 135)
+    doc.text(`Stock Pulse India report | ${new Date().toLocaleString('en-IN')}`, margin, 58)
+    doc.text(`${stock.c || 'Stock'} | ${resolveSector(stock)} | ${stock.symbol || stock.s}`, margin, 72)
+
+    const chartX = margin
+    const chartY = 88
+    const chartWidth = 260
+    const chartHeight = 68
+    doc.setFillColor(239, 246, 255)
+    doc.roundedRect(chartX, chartY, chartWidth, chartHeight, 7, 7, 'F')
+    doc.setFontSize(8)
+    doc.setTextColor(72, 103, 232)
+    doc.text(`${CHART_TIMEFRAMES[selectedTimeframe].label} price trend`, chartX + 10, chartY + 14)
+    const pricePoints = chartData.slice(-30).map(candle => Number(candle.close)).filter(Number.isFinite)
+    if (pricePoints.length > 1) {
+      const minimum = Math.min(...pricePoints)
+      const maximum = Math.max(...pricePoints)
+      const spread = maximum - minimum || 1
+      doc.setDrawColor(pricePoints.at(-1) >= pricePoints[0] ? 8 : 224, pricePoints.at(-1) >= pricePoints[0] ? 159 : 82, pricePoints.at(-1) >= pricePoints[0] ? 110 : 82)
+      doc.setLineWidth(2)
+      for (let index = 1; index < pricePoints.length; index += 1) {
+        const x1 = chartX + 10 + ((index - 1) / (pricePoints.length - 1)) * (chartWidth - 20)
+        const x2 = chartX + 10 + (index / (pricePoints.length - 1)) * (chartWidth - 20)
+        const y1 = chartY + chartHeight - 10 - ((pricePoints[index - 1] - minimum) / spread) * (chartHeight - 28)
+        const y2 = chartY + chartHeight - 10 - ((pricePoints[index] - minimum) / spread) * (chartHeight - 28)
+        doc.line(x1, y1, x2, y2)
+      }
+    }
+
+    const metricCard = (x, y, label, value, color) => {
+      doc.setFillColor(...color)
+      doc.roundedRect(x, y, 112, 30, 6, 6, 'F')
+      doc.setFontSize(7)
+      doc.setTextColor(80, 95, 120)
+      doc.text(label, x + 8, y + 11)
+      doc.setFontSize(11)
+      doc.setTextColor(23, 32, 51)
+      doc.text(value, x + 8, y + 24)
+    }
+    metricCard(310, 88, 'Current price', `INR ${reportValue(stock.currentPrice)}`, [231, 247, 243])
+    metricCard(430, 88, 'Daily change', `${reportValue(stock.change)}%`, [255, 242, 221])
+    metricCard(310, 124, 'Technical score', `${reportValue(stock.technicalScore)}/100`, [238, 241, 255])
+    metricCard(430, 124, 'Profit probability', `${reportValue(stock.profitProbability)}%`, [255, 234, 234])
+
+    addSection('About the stock', [[getStockDescription(stock), `${resolveSector(stock)} sector`]], [72, 103, 232])
+
+    addSection('Market overview', [
+      ['Current price', `INR ${reportValue(stock.currentPrice)}`],
+      ['Previous close', `INR ${reportValue(stock.previousClose)}`],
+      ['Daily change', `${reportValue(stock.change)}%`],
+      ['52-week range', `INR ${reportValue(stock.low52)} - INR ${reportValue(stock.high52)}`],
+      ['Market cap', `INR ${formatFinancialNumber(stock.marketCap, { currency: true })}`],
+      ['Latest market date', stock.latestMarketDate || '0']
+    ], [23, 143, 120])
+    addSection('Technical analysis', [
+      ['Trend / structure', `${stock.marketStructure?.trend || 'Neutral'} / ${stock.marketStructure?.structure || 'Unknown'}`],
+      ['Pattern', `${stock.pattern?.type || 'Consolidation'} (${stock.pattern?.direction || 'Neutral'})`],
+      ['RSI (14)', reportValue(stock.rsi)],
+      ['MACD / signal', `${reportValue(stock.macd)} / ${reportValue(stock.signal)}`],
+      ['MACD histogram', reportValue(stock.macdHistogram)],
+      ['ADX (14)', reportValue(stock.adx)],
+      ['VWAP', `INR ${reportValue(stock.vwap)}`],
+      ['EMA 9 / 20 / 50 / 200', [stock.ema9, stock.ema20, stock.ema50, stock.ema200].map(reportValue).join(' / ')],
+      ['DMA 20 / 50 / 200', [stock.dma20, stock.dma50, stock.dma200].map(reportValue).join(' / ')],
+      ['Support / resistance / pivot', [stock.support, stock.resistance, stock.pivot].map(reportValue).join(' / ')],
+      ['Volume RVOL', `${reportValue(stock.volumeAnalysis?.rvol)}x`],
+      ['Technical score', `${reportValue(stock.technicalScore)}/100`]
+    ], [72, 103, 232])
+    addSection('Risk management', [
+      ['Intraday bias', `${stock.intradayBias || 'Neutral'} (${stock.intradayRiskDirection || 'Neutral'})`],
+      ['Intraday target / stop-loss', `INR ${reportValue(stock.intradayTarget)} / INR ${reportValue(stock.intradayStopLoss)}`],
+      ['Intraday ATR / session range', `INR ${reportValue(stock.intradayAtr)} / INR ${reportValue(stock.intradaySessionLow)} - INR ${reportValue(stock.intradaySessionHigh)}`],
+      ['Swing bias', `${stock.swingBias || 'Neutral'} (${stock.swingRiskDirection || 'Neutral'})`],
+      ['Swing target / stop-loss', `INR ${reportValue(stock.swingTarget)} / INR ${reportValue(stock.swingStopLoss)}`],
+      ['Risk-reward', reportValue(stock.riskReward)]
+    ], [208, 138, 34])
+    addSection('DVM and probability', [
+      ['DVM score', `${reportValue(stock.dvm?.score)}/100`],
+      ['Durability / valuation / momentum', [stock.dvm?.durability, stock.dvm?.valuation, stock.dvm?.momentum].map(value => `${reportValue(value)}/100`).join(' / ')],
+      ['Profit probability', `${reportValue(stock.profitProbability)}%`],
+      ['Intraday / swing bias', `${stock.intradayBias || 'Neutral'} / ${stock.swingBias || 'Neutral'}`]
+    ], [139, 98, 201])
+
+    if (financials) {
+      const valuation = financials.valuation || {}
+      const performance = financials.performance || {}
+      const balanceSheet = financials.balanceSheet || {}
+      const latestYear = financials.latestYear || {}
+      addSection('Financial health', [
+        ['P/E / forward P/E / P/BV', [valuation.pe, valuation.forwardPe, valuation.priceToBook].map(reportValue).join(' / ')],
+        ['Dividend yield / per share', `${reportPercent(valuation.dividendYield)} / INR ${reportValue(valuation.dividendPerShare)}`],
+        ['Revenue / gross profit', `INR ${formatFinancialNumber(performance.revenue, { currency: true })} / INR ${formatFinancialNumber(performance.grossProfit, { currency: true })}`],
+        ['Revenue growth / gross margin', `${reportPercent(performance.revenueGrowth)} / ${reportPercent(performance.grossMargin)}`],
+        ['Profit margin / operating margin', `${reportPercent(performance.profitMargin)} / ${reportPercent(performance.operatingMargin)}`],
+        ['ROE / ROA', `${reportPercent(performance.returnOnEquity)} / ${reportPercent(performance.returnOnAssets)}`],
+        ['Debt / equity / current ratio', `${reportValue(balanceSheet.debtToEquity)} / ${reportValue(balanceSheet.currentRatio)}`],
+        ['Net income / total assets / liabilities', `INR ${formatFinancialNumber(latestYear.netIncome, { currency: true })} / INR ${formatFinancialNumber(latestYear.totalAssets, { currency: true })} / INR ${formatFinancialNumber(latestYear.totalLiabilities, { currency: true })}`],
+        ['Free cash flow / operating cash flow', `INR ${formatFinancialNumber(balanceSheet.freeCashFlow, { currency: true })} / INR ${formatFinancialNumber(balanceSheet.operatingCashFlow, { currency: true })}`]
+      ], [8, 143, 120])
+    }
+
+    addSection('Pros and cons', [
+      ['Pros', prosCons.pros.join(' | ') || '0'],
+      ['Cons', prosCons.cons.join(' | ') || '0']
+    ], [224, 82, 82])
+
+    if (relatedNews.length) {
+      autoTable(doc, {
+        startY: doc.lastAutoTable.finalY + 16,
+        head: [['Related news', 'Source / published']],
+        body: relatedNews.slice(0, 10).map(article => [article.title, `${article.source || 'News'} | ${article.publishedAt || '0'}`]),
+        theme: 'grid',
+        headStyles: { fillColor: [23, 32, 51], textColor: 255, fontSize: 9 },
+        bodyStyles: { fontSize: 8 },
+        margin: { left: margin, right: margin },
+        columnStyles: { 0: { cellWidth: 350 }, 1: { cellWidth: 170 } }
+      })
+    }
+
+    if (chartData.length) {
+      autoTable(doc, {
+        startY: doc.lastAutoTable.finalY + 16,
+        head: [[`${CHART_TIMEFRAMES[selectedTimeframe].label} chart data`, 'Open', 'High', 'Low', 'Close', 'VWAP']],
+        body: chartData.slice(-30).map(candle => [candle.name, reportValue(candle.open), reportValue(candle.high), reportValue(candle.low), reportValue(candle.close), reportValue(candle.vwap)]),
+        theme: 'grid',
+        headStyles: { fillColor: [23, 32, 51], textColor: 255, fontSize: 8 },
+        bodyStyles: { fontSize: 7 },
+        margin: { left: margin, right: margin }
+      })
+    }
+
+    doc.setFontSize(8)
+    doc.setTextColor(100, 112, 135)
+    doc.text('Data is informational and may be delayed. This report is not investment advice.', margin, 806)
+    doc.save(`${stock.s || 'stock'}-stock-report.pdf`)
+  }
 
   return (
     <div className="detail-panel">
@@ -2180,7 +2453,7 @@ function StockDetailPanel({ stock, onClose, isWatched, onToggleWatchlist }) {
           <div className="panel-name-row">
             <h2><span className="popup-symbol">{stock.s}</span><span className="popup-company"> - {stock.n}</span></h2>
           </div>
-          <p>{stock.c} | {stock.sector}</p>
+          <p>{stock.c} | {resolveSector(stock)}</p>
           <div className="popup-dvm-summary">
             <strong>DVM {stock.dvm?.score || 0}/100</strong>
             <span className={`dvm-status ${getDvmTone(stock.dvm?.score)}`}>{getDvmStatus(stock.dvm)}</span>
@@ -2197,6 +2470,9 @@ function StockDetailPanel({ stock, onClose, isWatched, onToggleWatchlist }) {
           >
             <LineChart size={14} /> TradingView <ExternalLink size={12} />
           </a>
+          <button className="panel-report-btn" onClick={downloadStockReport} title="Download complete stock report as PDF" aria-label="Download complete stock report as PDF">
+            <Download size={14} /> Report PDF
+          </button>
           <button className={`panel-watch-btn ${isWatched ? 'watched' : ''}`} onClick={() => onToggleWatchlist(stock)}>
             <Star size={16} fill={isWatched ? 'currentColor' : 'none'} />
             {isWatched ? 'Watching' : 'Add to Watchlist'}
@@ -2219,7 +2495,7 @@ function StockDetailPanel({ stock, onClose, isWatched, onToggleWatchlist }) {
         <div className="stock-summary">
           <div className="stock-summary-heading"><h3>Stock Summary</h3><span className={`summary-signal ${stock.change >= 0 ? 'positive' : 'negative'}`}>{stock.change >= 0 ? 'Positive day' : 'Negative day'}</span></div>
           <p className="stock-description"><strong>About the stock:</strong> {getStockDescription(stock)}</p>
-          <p>{stock.s} is showing a {stock.marketStructure?.trend || 'Neutral'} trend with a {stock.pattern?.type || 'Consolidation'} pattern. Intraday bias is {stock.intradayBias || 'Neutral'} and swing bias is {stock.swingBias || 'Neutral'}.</p>
+          <p>{getStockSummary(stock)}</p>
           <div className="stock-summary-grid">
             <div><span>Trend</span><strong>{stock.marketStructure?.trend || 'Neutral'}</strong></div>
             <div><span>Pattern</span><strong>{stock.pattern?.type || 'Consolidation'}</strong></div>
@@ -2326,19 +2602,19 @@ function StockDetailPanel({ stock, onClose, isWatched, onToggleWatchlist }) {
         <div className="support-resistance">
           <h3>Risk Management</h3>
           <div className="level">
-            <span>Intraday Target</span>
+            <span>Intraday Target ({stock.intradayRiskDirection || 'Long'})</span>
             <strong>₹{stock.intradayTarget?.toFixed(2)}</strong>
           </div>
           <div className="level">
-            <span>Intraday SL</span>
+            <span>Intraday SL ({stock.intradayRiskDirection || 'Long'})</span>
             <strong>₹{stock.intradayStopLoss?.toFixed(2)}</strong>
           </div>
           <div className="level">
-            <span>Swing Target</span>
+            <span>Swing Target ({stock.swingRiskDirection || 'Long'})</span>
             <strong>₹{stock.swingTarget?.toFixed(2)}</strong>
           </div>
           <div className="level">
-            <span>Swing SL</span>
+            <span>Swing SL ({stock.swingRiskDirection || 'Long'})</span>
             <strong>₹{stock.swingStopLoss?.toFixed(2)}</strong>
           </div>
         </div>

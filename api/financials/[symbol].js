@@ -35,15 +35,22 @@ export default async function handler(request, response) {
     const eps = annual('DilutedEPS')
     const shares = annual('DilutedAverageShares')
     const dividendsPaid = annual('CashDividendsPaid')
-    const dividendPerShare = shares && dividendsPaid ? Math.abs(dividendsPaid) / shares : null
-    const marketCap = currentPrice && shares ? currentPrice * shares : null
+    const hasValue = value => value !== null && value !== undefined && Number.isFinite(Number(value))
+    const dividendPerShare = hasValue(shares) && hasValue(dividendsPaid) && Number(shares) !== 0 ? Math.abs(dividendsPaid) / shares : null
+    const marketCap = hasValue(currentPrice) && hasValue(shares) ? currentPrice * shares : null
+    const pe = hasValue(currentPrice) && hasValue(eps) && Number(eps) !== 0 ? currentPrice / eps : null
+    const priceToBook = hasValue(equity) && hasValue(shares) && hasValue(currentPrice) && Number(equity) !== 0 ? currentPrice * shares / equity : null
+    const dividendYield = hasValue(currentPrice) && hasValue(dividendPerShare) && Number(currentPrice) !== 0 ? dividendPerShare / currentPrice : null
+    const margin = (value, denominator) => hasValue(value) && hasValue(denominator) && Number(denominator) !== 0 ? value / denominator : null
+    const returnOn = (value, denominator) => margin(value, denominator)
+    const debtToEquity = hasValue(equity) && hasValue(annual('TotalDebt')) && Number(equity) !== 0 ? annual('TotalDebt') / equity * 100 : null
 
     response.setHeader('Cache-Control', 'public, max-age=900')
     return response.json({
       symbol, updatedAt: new Date().toISOString(), currency: 'INR',
-      valuation: { marketCap, pe: currentPrice && eps ? currentPrice / eps : null, forwardPe: null, priceToBook: equity && shares && currentPrice ? currentPrice * shares / equity : null, dividendYield: currentPrice && dividendPerShare ? dividendPerShare / currentPrice : null, shares, dividendPerShare },
-      performance: { revenue, grossProfit, operatingIncome, pretaxIncome, revenueGrowth: growth('TotalRevenue'), earningsGrowth: growth('NetIncome'), profitMargin: revenue ? netIncome / revenue : null, grossMargin: revenue ? grossProfit / revenue : null, operatingMargin: revenue ? operatingIncome / revenue : null, returnOnEquity: equity ? netIncome / equity : null, returnOnAssets: assets ? netIncome / assets : null, eps },
-      balanceSheet: { totalCash: null, totalDebt: annual('TotalDebt'), debtToEquity: equity ? annual('TotalDebt') / equity * 100 : null, currentRatio: null, freeCashFlow: annual('FreeCashFlow'), operatingCashFlow: annual('OperatingCashFlow'), equity, assets },
+      valuation: { marketCap, pe, forwardPe: null, priceToBook, dividendYield, shares, dividendPerShare },
+      performance: { revenue, grossProfit, operatingIncome, pretaxIncome, revenueGrowth: growth('TotalRevenue'), earningsGrowth: growth('NetIncome'), profitMargin: margin(netIncome, revenue), grossMargin: margin(grossProfit, revenue), operatingMargin: margin(operatingIncome, revenue), returnOnEquity: returnOn(netIncome, equity), returnOnAssets: returnOn(netIncome, assets), eps },
+      balanceSheet: { totalCash: null, totalDebt: annual('TotalDebt'), debtToEquity, currentRatio: null, freeCashFlow: annual('FreeCashFlow'), operatingCashFlow: annual('OperatingCashFlow'), equity, assets },
       latestYear: { netIncome, totalAssets: assets, totalLiabilities: annual('TotalLiabilitiesNetMinorityInterest'), totalEquity: equity }
     })
   } catch (error) {

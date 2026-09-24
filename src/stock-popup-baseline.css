@@ -182,6 +182,27 @@
   font-size: 10px;
 }
 
+.detail-panel .panel-report-btn {
+  width: auto;
+  min-height: 30px;
+  padding: 7px 9px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 5px;
+  border: 1px solid #47749d;
+  border-radius: 7px;
+  background: #1769d1;
+  color: #fff;
+  font-size: 10px;
+  font-weight: 800;
+}
+
+.detail-panel .panel-report-btn:hover {
+  background: #008f78;
+  border-color: #65ead2;
+}
+
 .detail-panel .close-btn {
   position: static;
   width: auto;
