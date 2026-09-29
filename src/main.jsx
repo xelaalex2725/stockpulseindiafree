@@ -130,7 +130,6 @@ const LARGE_CAP_STOCKS = [
   { s: 'UNOMINDA', n: 'Uno Minda', symbol: 'UNOMINDA.NS', sector: 'Auto' },
   { s: 'CHOLAFIN', n: 'Cholamandalam', symbol: 'CHOLAFIN.NS', sector: 'Finance' },
   { s: 'PFIZER', n: 'Pfizer India', symbol: 'PFIZER.NS', sector: 'Pharma' },
-  { s: 'NODAL', n: 'NOCIL', symbol: 'NOCIL.NS', sector: 'Chemicals' }
 ]
 
 const MID_CAP_STOCKS = [
@@ -160,7 +159,7 @@ const MID_CAP_STOCKS = [
   { s: 'FEDERALBNK', n: 'Federal Bank', symbol: 'FEDERALBNK.NS', sector: 'Banking' },
   { s: 'IEX', n: 'Indian Energy Exchange', symbol: 'IEX.NS', sector: 'Energy' },
   { s: 'CHOLAFIN', n: 'Cholamandalam', symbol: 'CHOLAFIN.NS', sector: 'Finance' },
-  { s: 'SRTRANSFIN', n: 'Shriram Transport', symbol: 'SRTRANSFIN.NS', sector: 'Finance' },
+  { s: 'SHRIRAMFIN', n: 'Shriram Finance', symbol: 'SHRIRAMFIN.NS', sector: 'Finance' },
   { s: 'VOLTAS', n: 'Voltas', symbol: 'VOLTAS.NS', sector: 'Consumer' },
   { s: 'GRINDWELL', n: 'Grindwell Norton', symbol: 'GRINDWELL.NS', sector: 'Industrial' },
   { s: 'BOSCHLTD', n: 'Bosch', symbol: 'BOSCHLTD.NS', sector: 'Auto' },
@@ -334,6 +333,8 @@ const STOCK_CONFIG = dedupeBySymbol([
 
 const MAX_ANALYSIS_STOCKS = 1000
 const ANALYSIS_CONCURRENCY = 8
+const SYMBOL_ALIASES = { NODAL: 'NOCIL', SRTRANSFIN: 'SHRIRAMFIN' }
+const EXCLUDED_SYMBOLS = new Set(['500730.BO', 'SRTRANSFIN.NS'])
 
 const resolveSector = stock => {
   const symbol = String(stock.symbol || stock.s || '').toUpperCase()
@@ -551,6 +552,15 @@ const fetchFinancials = async (symbol) => {
   }
 }
 
+const getIndiaTradingDate = timestamp => {
+  if (!Number.isFinite(Number(timestamp))) return null
+  const parts = new Intl.DateTimeFormat('en-CA', {
+    timeZone: 'Asia/Kolkata', year: 'numeric', month: '2-digit', day: '2-digit'
+  }).formatToParts(new Date(Number(timestamp) * 1000))
+  const values = Object.fromEntries(parts.map(part => [part.type, part.value]))
+  return `${values.year}-${values.month}-${values.day}`
+}
+
 const formatFinancialNumber = (value, options = {}) => {
   if (value === null || value === undefined || value === '' || !Number.isFinite(Number(value))) {
     const { percent = false, currency = false } = options
@@ -637,6 +647,39 @@ const getRelatedNews = (stock, articles) => articles.filter(article => {
   const text = `${article.title} ${article.description}`.toLowerCase()
   return [stock.s, stock.n, stock.symbol.replace(/\.(NS|BO)$/, '')].some(keyword => keyword && text.includes(keyword.toLowerCase()))
 })
+
+const getStockNotifications = (stocks, articles) => {
+  const positiveNews = /profit|growth|surge|rally|upgrade|buyback|order win|approval|dividend|record high|strong results|beats|outperform/i
+  return stocks.flatMap(stock => {
+    const relatedPositiveNews = getRelatedNews(stock, articles).filter(article => positiveNews.test(`${article.title} ${article.description}`))
+    const volumeSpike = Number(stock.volumeAnalysis?.rvol) >= 1.8
+    const priceSpike = Number(stock.change) >= 3
+    const notifications = []
+    if (volumeSpike && priceSpike) {
+      notifications.push({
+        id: `spike-${stock.symbol}-${stock.latestMarketDate || stock.change}`,
+        type: 'spike',
+        title: `${stock.s} high-volume price spike`,
+        message: `Up ${Number(stock.change).toFixed(2)}% with ${Number(stock.volumeAnalysis.rvol).toFixed(2)}x relative volume.`,
+        stock,
+        createdAt: stock.intradayMarketDate || stock.latestMarketDate || new Date().toISOString()
+      })
+    }
+    if (relatedPositiveNews.length) {
+      const article = relatedPositiveNews[0]
+      notifications.push({
+        id: `news-${stock.symbol}-${article.link}`,
+        type: 'news',
+        title: `${stock.s} positive news`,
+        message: article.title,
+        stock,
+        link: article.link,
+        createdAt: article.publishedAt || new Date().toISOString()
+      })
+    }
+    return notifications
+  }).sort((first, second) => new Date(second.createdAt) - new Date(first.createdAt)).slice(0, 30)
+}
 
 function MarketAlerts({ alerts, loading, error }) {
   return <section className="card analysis-section market-alerts">
@@ -768,6 +811,12 @@ const analyzeStock = async (stock) => {
   const dma20 = calculateSMA(closes, 20).at(-1) ?? currentPrice
   const dma50 = calculateSMA(closes, 50).at(-1) ?? currentPrice
   const dma200 = calculateSMA(closes, 200).at(-1) ?? currentPrice
+  const dma220Values = calculateSMA(closes, 220)
+  const dma220 = closes.length >= 220 ? dma220Values.at(-1) ?? null : null
+  const previousHistoricalHigh = highs.length > 1
+    ? Math.max(...highs.slice(0, -1).filter(value => Number.isFinite(Number(value)) && Number(value) > 0))
+    : null
+  const latestDailyClose = Number(closes.at(-1))
   const previous20High = Math.max(...closes.slice(-21, -1))
   const breakoutIndex = closes.reduce((latestIndex, close, index) => {
     if (index < 20) return latestIndex
@@ -782,6 +831,21 @@ const analyzeStock = async (stock) => {
   const previous20Volumes = volumes.slice(-21, -1)
   const averageVolume20 = previous20Volumes.reduce((total, volume) => total + volume, 0) / Math.min(20, previous20Volumes.length)
   const currentVolume = volumes[volumes.length - 1]
+  const latestIntradayTimestamp = intradayData?.timestamps?.at(-1)
+  const intradaySessionDate = getIndiaTradingDate(latestIntradayTimestamp)
+  const intradaySessionBars = intradayData?.timestamps?.map((timestamp, index) => ({
+    date: getIndiaTradingDate(timestamp),
+    open: Number(intradayData.opens[index]),
+    high: Number(intradayData.highs[index]),
+    low: Number(intradayData.lows[index]),
+    volume: Number(intradayData.volumes[index])
+  })).filter(bar => bar.date === intradaySessionDate && Number.isFinite(bar.high) && Number.isFinite(bar.low) && Number.isFinite(bar.volume)) || []
+  const intradaySessionOpen = intradaySessionBars[0]?.open ?? null
+  const intradaySessionHigh = intradaySessionBars.length ? Math.max(...intradaySessionBars.map(bar => bar.high)) : null
+  const intradaySessionLow = intradaySessionBars.length ? Math.min(...intradaySessionBars.map(bar => bar.low)) : null
+  const intradaySessionVolume = intradaySessionBars.reduce((total, bar) => total + bar.volume, 0)
+  const intradaySessionChange = previousClose > 0 ? (currentPrice / previousClose - 1) * 100 : null
+  const intradaySessionRvol = averageVolume20 > 0 ? intradaySessionVolume / averageVolume20 : null
   const averageTradedValue = closes.slice(-20).reduce((total, close, index) => total + close * volumes.slice(-20)[index], 0) / Math.min(20, closes.slice(-20).length)
 
   const intradayBias = currentPrice > liveVwap && liveRsi > 55 && liveRsi < 70 && liveMacd > liveSignal ? 'Bullish' :
@@ -797,7 +861,8 @@ const analyzeStock = async (stock) => {
   const liveLow = liveLows.length ? Math.min(...liveLows) : support
   const liveAtrValues = intradayData ? calculateATR(intradayData.highs, intradayData.lows, intradayData.closes, 14) : []
   const intradayAtr = Number(liveAtrValues.at(-1) ?? latestAtr)
-  const intradayLevels = calculateRiskLevels({ currentPrice, support: liveLow, resistance: liveHigh, atr: intradayAtr, bias: intradayBias })
+  const intradayMaximumMove = Math.max(intradayAtr * 3, currentPrice * 0.015)
+  const intradayLevels = calculateRiskLevels({ currentPrice, support: liveLow, resistance: liveHigh, atr: intradayAtr, bias: intradayBias, maxMove: intradayMaximumMove })
   const swingLevels = calculateRiskLevels({ currentPrice, support, resistance, atr: latestAtr * 1.5, bias: swingBias })
   const intradayStopLoss = intradayLevels.stopLoss
   const intradayTarget = intradayLevels.target
@@ -819,6 +884,9 @@ const analyzeStock = async (stock) => {
     dma20,
     dma50,
     dma200,
+    dma220,
+    previousHistoricalHigh: Number.isFinite(previousHistoricalHigh) ? previousHistoricalHigh : null,
+    latestDailyClose,
     rsi: latestRsi,
     macd: latestMacd,
     signal: latestSignal,
@@ -829,6 +897,13 @@ const analyzeStock = async (stock) => {
     intradayAtr,
     intradaySessionHigh: liveHigh,
     intradaySessionLow: liveLow,
+    intradaySessionDate,
+    intradaySessionOpen,
+    intradaySessionRangeHigh: intradaySessionHigh,
+    intradaySessionRangeLow: intradaySessionLow,
+    intradaySessionVolume,
+    intradaySessionChange,
+    intradaySessionRvol,
     intradayVwap: liveVwap,
     intradayRsi: liveRsi,
     support,
@@ -849,6 +924,7 @@ const analyzeStock = async (stock) => {
     intradayBias,
     swingBias,
     latestMarketDate: data.timestamps.at(-1) ? new Date(data.timestamps.at(-1) * 1000).toISOString() : new Date().toISOString(),
+    intradayMarketDate: intradayData?.timestamps?.at(-1) ? new Date(intradayData.timestamps.at(-1) * 1000).toISOString() : null,
     breakoutDate: breakoutIndex >= 0 ? new Date(data.timestamps[breakoutIndex] * 1000).toISOString() : null,
     breakdownDate: breakdownIndex >= 0 ? new Date(data.timestamps[breakdownIndex] * 1000).toISOString() : null,
     intradayProfitZone,
@@ -882,7 +958,8 @@ function StockAnalysisDashboard() {
   const [trackedStocks, setTrackedStocks] = useState(() => {
     try {
       const savedStocks = JSON.parse(localStorage.getItem('stock-pulse-tracked-stocks') || 'null')
-      return Array.isArray(savedStocks) && savedStocks.length ? dedupeBySymbol(savedStocks) : STOCK_CONFIG
+      const validSavedStocks = Array.isArray(savedStocks) ? savedStocks.filter(stock => !EXCLUDED_SYMBOLS.has(stock?.symbol)) : []
+      return validSavedStocks.length ? dedupeBySymbol(validSavedStocks) : STOCK_CONFIG
     } catch {
       return STOCK_CONFIG
     }
@@ -906,6 +983,11 @@ function StockAnalysisDashboard() {
   const [marketAlerts, setMarketAlerts] = useState([])
   const [alertsLoading, setAlertsLoading] = useState(false)
   const [alertsError, setAlertsError] = useState('')
+  const [notifications, setNotifications] = useState([])
+  const [notificationsOpen, setNotificationsOpen] = useState(false)
+  const [readNotificationIds, setReadNotificationIds] = useState(() => {
+    try { return JSON.parse(localStorage.getItem('stock-pulse-read-notifications') || '[]') } catch { return [] }
+  })
   const [watchlistSymbols, setWatchlistSymbols] = useState(() => {
     try {
       return JSON.parse(localStorage.getItem('stock-pulse-watchlist') || '[]')
@@ -921,6 +1003,7 @@ function StockAnalysisDashboard() {
   const [stockPage, setStockPage] = useState(1)
   const [stockUniverseReady, setStockUniverseReady] = useState(false)
   const trackedUniverse = useMemo(() => dedupeBySymbol([...trackedStocks, ...STOCK_CONFIG]).slice(0, MAX_ANALYSIS_STOCKS), [trackedStocks])
+  const unreadNotificationCount = notifications.filter(notification => !readNotificationIds.includes(notification.id)).length
 
   const saveTrackedStocks = (updater) => {
     setTrackedStocks(current => {
@@ -977,13 +1060,18 @@ function StockAnalysisDashboard() {
 
     const directoryMatch = stockDirectory.find(stock => `${stock.s} ${stock.n} ${stock.symbol}`.toLowerCase() === searchQuery.trim().toLowerCase())
     const exchange = directoryMatch?.symbol.endsWith('.BO') || input.startsWith('BSE:') || input.endsWith('.BO') ? 'BSE' : 'NSE'
-    const rawSymbol = directoryMatch ? directoryMatch.symbol.replace(/\.(NS|BO)$/, '') : input.replace(/^(NSE|BSE):/, '').replace(/\.(NS|BO)$/, '')
+    const requestedSymbol = directoryMatch ? directoryMatch.symbol.replace(/\.(NS|BO)$/, '') : input.replace(/^(NSE|BSE):/, '').replace(/\.(NS|BO)$/, '')
+    const rawSymbol = SYMBOL_ALIASES[requestedSymbol] || requestedSymbol
     if (!/^[A-Z0-9&-]+$/.test(rawSymbol)) {
       setSearchError('Enter a valid NSE/BSE symbol, such as RELIANCE or BSE:TCS.')
       return
     }
 
     const symbol = `${rawSymbol}.${exchange === 'BSE' ? 'BO' : 'NS'}`
+    if (EXCLUDED_SYMBOLS.has(symbol)) {
+      setSearchError(`No market data found for ${exchange}:${rawSymbol}. This listing is unavailable and has been removed.`)
+      return
+    }
     const knownStock = directoryMatch || trackedStocks.find(stock => stock.symbol === symbol) || STOCK_CONFIG.find(stock => stock.symbol === symbol)
     const stock = knownStock || {
       s: rawSymbol,
@@ -1054,9 +1142,25 @@ function StockAnalysisDashboard() {
   }, [])
 
   useEffect(() => {
+    const refreshNotifications = () => {
+      const nextNotifications = getStockNotifications(stocks, newsArticles)
+      setNotifications(nextNotifications)
+      const knownIds = new Set(nextNotifications.map(notification => notification.id))
+      setReadNotificationIds(current => {
+        const next = current.filter(id => knownIds.has(id))
+        localStorage.setItem('stock-pulse-read-notifications', JSON.stringify(next))
+        return next
+      })
+    }
+    refreshNotifications()
+    const interval = setInterval(refreshNotifications, 300000)
+    return () => clearInterval(interval)
+  }, [stocks, newsArticles])
+
+  useEffect(() => {
     if (!stockUniverseReady) return undefined
     loadAnalysis()
-    const interval = setInterval(loadAnalysis, 1800000) // 30 minutes
+    const interval = setInterval(loadAnalysis, 300000) // 5 minutes for spike alerts
     return () => clearInterval(interval)
   }, [trackedStocks, stockUniverseReady])
 
@@ -1079,7 +1183,7 @@ function StockAnalysisDashboard() {
     }
 
     loadNews()
-    const interval = setInterval(loadNews, 1800000)
+    const interval = setInterval(loadNews, 300000)
     return () => clearInterval(interval)
   }, [])
 
@@ -1164,6 +1268,12 @@ function StockAnalysisDashboard() {
     const result = typeof valueA === 'string' ? valueA.localeCompare(valueB) : valueA - valueB
     return sortConfig.direction === 'asc' ? result : -result
   })
+
+  const requestTableSort = key => setSortConfig(current => ({
+    key,
+    direction: current.key === key ? (current.direction === 'asc' ? 'desc' : 'asc') : ['technicalScore', 'profitProbability', 'currentPrice', 'change', 'rsi', 'volume'].includes(key) ? 'desc' : 'asc'
+  }))
+  const tableSortHeader = (label, key) => <button className="sort-header" onClick={() => requestTableSort(key)}>{label} <span>{sortConfig.key === key ? (sortConfig.direction === 'asc' ? '↑' : '↓') : '↕'}</span></button>
 
   const largeCaps = useMemo(() => sortStocks(stocks.filter(s => s.c === 'Large Cap')), [stocks, sortConfig, newsArticles])
   const midCaps = useMemo(() => sortStocks(stocks.filter(s => s.c === 'Mid Cap')), [stocks, sortConfig, newsArticles])
@@ -1253,7 +1363,7 @@ function StockAnalysisDashboard() {
   const visibleBrokerCalls = brokerCalls.filter(item => matchesStockSearch(item.stock, tabSearches.brokerCalls || ''))
   const visibleDividends = nseDividends.filter(dividend => `${dividend.company} ${dividend.purpose}`.toLowerCase().includes((tabSearches.dividends || '').trim().toLowerCase()))
   const visibleIpos = ipos.filter(ipo => `${ipo.company} ${ipo.symbol} ${ipo.status} ${ipo.issueType}`.toLowerCase().includes((tabSearches.ipos || '').trim().toLowerCase()))
-  const searchableTabs = new Set(['top30', 'largecap', 'midcap', 'smallcap', 'watchlist', 'patterns', 'news', 'brokerCalls', 'dividends', 'ipos'])
+  const searchableTabs = new Set(['top30', 'largecap', 'midcap', 'smallcap', 'watchlist', 'patterns', 'ath220', 'news', 'brokerCalls', 'dividends', 'ipos'])
   const searchSuggestions = searchQuery.trim().length < 2 ? [] : stockDirectory.filter(stock => `${stock.s} ${stock.n} ${stock.symbol}`.toLowerCase().includes(searchQuery.trim().toLowerCase())).slice(0, 8)
 
   const toggleWatchlist = (stock) => {
@@ -1264,6 +1374,22 @@ function StockAnalysisDashboard() {
       localStorage.setItem('stock-pulse-watchlist', JSON.stringify(next))
       return next
     })
+  }
+
+  const markNotificationRead = notification => {
+    setReadNotificationIds(current => {
+      const next = current.includes(notification.id) ? current : [...current, notification.id]
+      localStorage.setItem('stock-pulse-read-notifications', JSON.stringify(next))
+      return next
+    })
+    if (notification.stock) setSelectedStock(notification.stock)
+    if (notification.link) window.open(notification.link, '_blank', 'noopener,noreferrer')
+  }
+
+  const markAllNotificationsRead = () => {
+    const ids = notifications.map(notification => notification.id)
+    setReadNotificationIds(ids)
+    localStorage.setItem('stock-pulse-read-notifications', JSON.stringify(ids))
   }
 
   const handleNavClick = (label) => {
@@ -1288,7 +1414,16 @@ function StockAnalysisDashboard() {
           <div className="cockpit-date"><span>INDIA · NSE / BSE</span><strong>{new Date().toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' })}</strong></div>
         </div>
         <div className="top-actions">
-          <button className="iconbtn"><Bell size={18} /></button>
+          <div className="notification-wrap">
+            <button className="iconbtn notification-button" onClick={() => setNotificationsOpen(current => !current)} aria-label={`Notifications${unreadNotificationCount ? `, ${unreadNotificationCount} unread` : ''}`} aria-expanded={notificationsOpen}>
+              <Bell size={18} />
+              {unreadNotificationCount > 0 && <span className="notification-badge">{unreadNotificationCount > 99 ? '99+' : unreadNotificationCount}</span>}
+            </button>
+            {notificationsOpen && <div className="notification-panel" role="dialog" aria-label="Notifications">
+              <div className="notification-panel-head"><strong>Notifications</strong><button onClick={markAllNotificationsRead} disabled={!unreadNotificationCount}>Mark all read</button></div>
+              {notifications.length === 0 ? <p className="notification-empty">No high-volume price spikes or positive news yet.</p> : <div className="notification-list">{notifications.map(notification => <button className={`notification-item ${readNotificationIds.includes(notification.id) ? 'read' : 'unread'}`} key={notification.id} onClick={() => markNotificationRead(notification)}><span className={`notification-dot ${notification.type}`} /><span><strong>{notification.title}</strong><small>{notification.message}</small><time>{new Date(notification.createdAt).toLocaleString('en-IN', { day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit' })}</time></span></button>)}</div>}
+            </div>}
+          </div>
           <button className="profile">AI</button>
           <nav className="topbar-nav" aria-label="Main navigation">
             <select className="broker-menu" aria-label="Select broker" defaultValue="" onChange={event => { const broker = BROKER_PROFILES.find(item => item.name === event.target.value); if (broker) window.open(broker.url, '_blank', 'noopener,noreferrer'); event.target.value = '' }}>
@@ -1356,16 +1491,13 @@ function StockAnalysisDashboard() {
             📊 Patterns
           </button>
           <button className={tab === 'screener' ? 'active' : ''} onClick={() => setTab('screener')}>
-            🔎 Screener ({stocks.filter(matchesScreener).length})
+            🔎 Screeners ({stocks.filter(matchesScreener).length} · {stocks.filter(stock => getAth220Setup(stock).eligible).length})
           </button>
           <button className={tab === 'news' ? 'active' : ''} onClick={() => setTab('news')}>
             📰 News Movers
           </button>
           <button className={tab === 'brokerCalls' ? 'active' : ''} onClick={() => setTab('brokerCalls')}>
             🎯 Broker Calls
-          </button>
-          <button className={tab === 'ai' ? 'active' : ''} onClick={() => setTab('ai')}>
-            ✦ AI Q&amp;A
           </button>
           <button className={tab === 'dividends' ? 'active' : ''} onClick={() => setTab('dividends')}>
             💰 Dividends ({nseDividends.length})
@@ -1407,21 +1539,20 @@ function StockAnalysisDashboard() {
             {tab === 'top30' && (
               <section className="card analysis-section">
                 <h2>🏆 TOP 50 RANKED STOCKS</h2>
-                <StockSortControls sortConfig={sortConfig} onChange={setSortConfig} />
                 <div className="table-wrapper">
                   <table className="analysis-table">
                     <thead>
                       <tr>
                         <th>Rank</th>
-                        <th>Stock</th>
-                        <th>Price</th>
-                        <th>Change %</th>
-                        <th>Pattern</th>
-                        <th>RSI</th>
-                        <th>Trend</th>
-                        <th>Volume</th>
-                        <th>Score</th>
-                        <th>Profit probability</th>
+                        <th>{tableSortHeader('Stock', 'stock')}</th>
+                        <th>{tableSortHeader('Price', 'currentPrice')}</th>
+                        <th>{tableSortHeader('Change %', 'change')}</th>
+                        <th>{tableSortHeader('Pattern', 'pattern')}</th>
+                        <th>{tableSortHeader('RSI', 'rsi')}</th>
+                        <th>{tableSortHeader('Trend', 'trend')}</th>
+                        <th>{tableSortHeader('Volume', 'volume')}</th>
+                        <th>{tableSortHeader('Score', 'technicalScore')}</th>
+                        <th>{tableSortHeader('Profit probability', 'profitProbability')}</th>
                         <th>Action</th>
                       </tr>
                     </thead>
@@ -1473,7 +1604,7 @@ function StockAnalysisDashboard() {
                           <td className="score">
                             <strong className="score-value">{stock.technicalScore || 0}</strong>
                           </td>
-                          <td className="probability-cell"><strong>{calculateProfitProbability(stock, getRelatedNews(stock, newsArticles))}%</strong><small>model estimate</small></td>
+                          <td className="probability-cell"><strong>{calculateProfitProbability(stock, getRelatedNews(stock, newsArticles))}%</strong><small>technical estimate</small></td>
                           <td className="row-actions-cell">
                             <button className={`watch-btn ${watchlistSymbols.includes(stock.symbol) ? 'watched' : ''}`} title={watchlistSymbols.includes(stock.symbol) ? 'Remove from watchlist' : 'Add to watchlist'} onClick={event => { event.stopPropagation(); toggleWatchlist(stock) }}>
                               <Star size={14} fill={watchlistSymbols.includes(stock.symbol) ? 'currentColor' : 'none'} />
@@ -1493,7 +1624,6 @@ function StockAnalysisDashboard() {
             {tab === 'largecap' && (
               <section className="card analysis-section">
                 <h2>🥇 {visibleLargeCaps.length} LARGE CAP STOCKS</h2>
-                <StockSortControls sortConfig={sortConfig} onChange={setSortConfig} />
                 <StockGrid stocks={pagedLargeCaps} newsArticles={newsArticles} onSelect={setSelectedStock} watchlistSymbols={watchlistSymbols} onToggleWatchlist={toggleWatchlist} />
                 <StockPagination items={visibleLargeCaps} page={stockPage} onPageChange={setStockPage} />
               </section>
@@ -1502,7 +1632,6 @@ function StockAnalysisDashboard() {
             {tab === 'midcap' && (
               <section className="card analysis-section">
                 <h2>🚀 {visibleMidCaps.length} MID CAP STOCKS</h2>
-                <StockSortControls sortConfig={sortConfig} onChange={setSortConfig} />
                 <StockGrid stocks={pagedMidCaps} newsArticles={newsArticles} onSelect={setSelectedStock} watchlistSymbols={watchlistSymbols} onToggleWatchlist={toggleWatchlist} />
                 <StockPagination items={visibleMidCaps} page={stockPage} onPageChange={setStockPage} />
               </section>
@@ -1511,7 +1640,6 @@ function StockAnalysisDashboard() {
             {tab === 'smallcap' && (
               <section className="card analysis-section">
                 <h2>⚡ {visibleSmallCaps.length} SMALL CAP STOCKS</h2>
-                <StockSortControls sortConfig={sortConfig} onChange={setSortConfig} />
                 <StockGrid stocks={pagedSmallCaps} newsArticles={newsArticles} onSelect={setSelectedStock} watchlistSymbols={watchlistSymbols} onToggleWatchlist={toggleWatchlist} />
                 <StockPagination items={visibleSmallCaps} page={stockPage} onPageChange={setStockPage} />
               </section>
@@ -1526,7 +1654,6 @@ function StockAnalysisDashboard() {
                   </div>
                   <span className="dividend-count">{watchlistStocks.length} stocks</span>
                 </div>
-                <StockSortControls sortConfig={sortConfig} onChange={setSortConfig} />
                 {visibleWatchlist.length === 0 ? (
                   <div className="no-results">No stocks saved yet. Use Add to Watchlist on any stock.</div>
                 ) : (
@@ -1552,7 +1679,10 @@ function StockAnalysisDashboard() {
             )}
 
             {tab === 'screener' && (
-              <StockScreener stocks={stocks.filter(matchesScreener)} onSelect={setSelectedStock} />
+              <>
+                <StockScreener stocks={filterStocksForTab(stocks.filter(matchesScreener), 'screener')} onSelect={setSelectedStock} />
+                <Ath220Dashboard stocks={filterStocksForTab(stocks, 'screener')} onSelect={setSelectedStock} />
+              </>
             )}
 
             {tab === 'news' && (
@@ -1565,16 +1695,12 @@ function StockAnalysisDashboard() {
 
             {tab === 'brokers' && <BrokerDirectory />}
 
-            {tab === 'ai' && (
-              <AIQueryPanel stocks={stocks} brokerCalls={brokerCalls} newsMovers={newsMovers} onSelect={setSelectedStock} />
-            )}
-
             {tab === 'dividends' && (
               <DividendCalendar dividends={visibleDividends} loading={dividendLoading} error={dividendError} />
             )}
 
             {tab === 'ipos' && (
-              <IpoCalendar ipos={visibleIpos} newsArticles={newsArticles} loading={ipoLoading} error={ipoError} onSelect={setSelectedIpo} />
+              <IpoCalendar ipos={visibleIpos} stocks={stocks} newsArticles={newsArticles} loading={ipoLoading} error={ipoError} onSelect={setSelectedIpo} />
             )}
 
             {tab === 'alerts' && (
@@ -1582,7 +1708,7 @@ function StockAnalysisDashboard() {
             )}
 
             {selectedStock && <StockDetailPanel stock={selectedStock} newsArticles={newsArticles} onClose={() => setSelectedStock(null)} isWatched={watchlistSymbols.includes(selectedStock.symbol)} onToggleWatchlist={toggleWatchlist} />}
-            {selectedIpo && <IpoDetailPanel ipo={selectedIpo} newsArticles={newsArticles} onClose={() => setSelectedIpo(null)} />}
+            {selectedIpo && <IpoDetailPanel ipo={selectedIpo} stocks={stocks} newsArticles={newsArticles} onClose={() => setSelectedIpo(null)} />}
           </>
         )}
       </main>
@@ -1790,13 +1916,54 @@ function DividendCalendar({ dividends, loading, error }) {
   )
 }
 
-function IpoCalendar({ ipos, newsArticles, loading, error, onSelect }) {
+const normalizeIpoText = value => String(value || '').toLowerCase().replace(/\b(limited|ltd|india|private|pvt|inc|corporation|company)\b/g, ' ').replace(/[&.,()-]/g, ' ').replace(/\s+/g, ' ').trim()
+
+const getIpoCurrentPrice = (ipo, stocks = []) => {
+  const directPrice = Number(String(ipo.currentPrice || '').replace(/[^0-9.-]/g, ''))
+  if (Number.isFinite(directPrice) && directPrice > 0) return directPrice
+  const ipoSymbol = String(ipo.symbol || '').toUpperCase().replace(/\.(NS|BO)$/, '')
+  const ipoName = normalizeIpoText(ipo.company)
+  const matchedStock = stocks.find(stock => {
+    const stockSymbol = String(stock.s || stock.symbol || '').toUpperCase().replace(/\.(NS|BO)$/, '')
+    const stockName = normalizeIpoText(stock.n)
+    return (ipoSymbol && stockSymbol === ipoSymbol) || (ipoName && stockName && stockName.length > 5 && (ipoName === stockName || ipoName.includes(stockName) || stockName.includes(ipoName)))
+  })
+  const price = Number(matchedStock?.currentPrice)
+  return Number.isFinite(price) && price > 0 ? price : null
+}
+
+const formatIpoDate = (date, fallback = 'N/A') => date ? new Date(date).toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' }) : fallback
+
+function IpoCalendar({ ipos, stocks, newsArticles, loading, error, onSelect }) {
   const [statusFilter, setStatusFilter] = useState('All')
+  const [sortConfig, setSortConfig] = useState({ key: 'openDate', direction: 'asc' })
   const filters = ['All', 'Upcoming', 'Open', 'Closed', 'Listed']
   const threeMonthsAgo = new Date()
   threeMonthsAgo.setMonth(threeMonthsAgo.getMonth() - 3)
   const monthlyIpos = ipos.filter(ipo => [ipo.openDate, ipo.closeDate, ipo.listingDate].some(date => date && new Date(date) >= threeMonthsAgo))
   const filteredIpos = statusFilter === 'All' ? monthlyIpos : monthlyIpos.filter(ipo => ipo.status === statusFilter)
+  const sortedIpos = useMemo(() => [...filteredIpos].sort((first, second) => {
+    const valueFor = ipo => {
+      if (sortConfig.key === 'company') return ipo.company || ''
+      if (sortConfig.key === 'type') return ipo.issueType || ''
+      if (sortConfig.key === 'status') return ipo.status || ''
+      if (sortConfig.key === 'sentiment') return getIpoListingEstimate(ipo, newsArticles).sentiment
+      if (sortConfig.key === 'estimate') return Number(getIpoListingEstimate(ipo, newsArticles).estimate.replace(/[^0-9.-]/g, '')) || 0
+      if (sortConfig.key === 'currentPrice') return getIpoCurrentPrice(ipo, stocks) || 0
+      if (sortConfig.key === 'priceBand') return Number(String(ipo.priceRange || '').replace(/[^0-9.-]/g, '')) || 0
+      if (sortConfig.key === 'openDate' || sortConfig.key === 'closeDate' || sortConfig.key === 'listingDate') return Date.parse(ipo[sortConfig.key] || '') || 0
+      return ipo[sortConfig.key] || ''
+    }
+    const firstValue = valueFor(first)
+    const secondValue = valueFor(second)
+    const result = typeof firstValue === 'string' ? firstValue.localeCompare(secondValue) : firstValue - secondValue
+    return sortConfig.direction === 'asc' ? result : -result
+  }), [filteredIpos, newsArticles, sortConfig, stocks])
+  const requestSort = key => setSortConfig(current => ({
+    key,
+    direction: current.key === key ? (current.direction === 'asc' ? 'desc' : 'asc') : key === 'company' || key === 'type' || key === 'status' || key === 'sentiment' || key === 'openDate' || key === 'closeDate' || key === 'listingDate' ? 'asc' : 'desc'
+  }))
+  const sortHeader = (label, key) => <button className="sort-header" onClick={() => requestSort(key)}>{label} <span>{sortConfig.key === key ? (sortConfig.direction === 'asc' ? '↑' : '↓') : '↕'}</span></button>
 
   return (
     <section className="card analysis-section ipo-section">
@@ -1821,16 +1988,17 @@ function IpoCalendar({ ipos, newsArticles, loading, error, onSelect }) {
       ) : (
         <div className="table-wrapper">
           <table className="analysis-table ipo-table">
-            <thead><tr><th>Company</th><th>Type</th><th>Open Date</th><th>Close Date</th><th>Price Band</th><th>Potential Listing</th><th>Current Price</th><th>News Signal</th></tr></thead>
-            <tbody>{filteredIpos.map((ipo, index) => (
+            <thead><tr><th>{sortHeader('Company', 'company')}</th><th>{sortHeader('Type', 'type')}</th><th>{sortHeader('Open Date', 'openDate')}</th><th>{sortHeader('Close Date', 'closeDate')}</th><th>{sortHeader('Listing Date', 'listingDate')}</th><th>{sortHeader('Price Band', 'priceBand')}</th><th>{sortHeader('Potential Listing', 'estimate')}</th><th>{sortHeader('Current Price', 'currentPrice')}</th><th>{sortHeader('News Signal', 'sentiment')}</th></tr></thead>
+            <tbody>{sortedIpos.map((ipo, index) => (
               <tr key={`${ipo.company}-${ipo.openDate}-${index}`} onClick={() => onSelect(ipo)}>
                 <td className="stock-name"><strong>{ipo.company}</strong><small>{ipo.symbol || 'NSE issue'}</small></td>
                 <td>{ipo.issueType}</td>
-                <td className="dividend-date">{ipo.openDate || '—'}</td>
-                <td>{ipo.closeDate || '—'}</td>
-                <td>{ipo.priceRange}</td>
+                <td className="dividend-date">{formatIpoDate(ipo.openDate)}</td>
+                <td>{formatIpoDate(ipo.closeDate)}</td>
+                <td className="dividend-date">{formatIpoDate(ipo.listingDate)}</td>
+                <td>{ipo.priceRange || 'Not disclosed'}</td>
                 <td className="ipo-estimate">{getIpoListingEstimate(ipo, newsArticles).estimate}</td>
-                <td className="ipo-current-price">{ipo.currentPrice || 'Not available'}</td>
+                <td className="ipo-current-price">{getIpoCurrentPrice(ipo, stocks) ? `₹${getIpoCurrentPrice(ipo, stocks).toFixed(2)}` : 'Not available'}</td>
                 <td><span className="sector">{getIpoListingEstimate(ipo, newsArticles).sentiment}</span></td>
               </tr>
             ))}</tbody>
@@ -1841,14 +2009,15 @@ function IpoCalendar({ ipos, newsArticles, loading, error, onSelect }) {
   )
 }
 
-function IpoDetailPanel({ ipo, newsArticles, onClose }) {
+function IpoDetailPanel({ ipo, stocks, newsArticles, onClose }) {
   const listingEstimate = getIpoListingEstimate(ipo, newsArticles)
+  const currentPrice = getIpoCurrentPrice(ipo, stocks)
   const details = [
     ['Issue type', ipo.issueType],
     ['Open date', ipo.openDate],
     ['Close date', ipo.closeDate],
     ['Listing date', ipo.listingDate],
-    ['Current price', ipo.currentPrice || 'Not available'],
+    ['Current price', currentPrice ? `₹${currentPrice.toFixed(2)}` : 'Not available'],
     ['Price band', ipo.priceRange],
     ['Issue size', ipo.issueSize],
     ['Lot size', ipo.lotSize],
@@ -2151,7 +2320,110 @@ function PatternGrid({ patterns, onSelect, watchlistSymbols, onToggleWatchlist }
   )
 }
 
+const getAth220Setup = stock => {
+  const price = Number(stock.currentPrice)
+  const dma220 = Number(stock.dma220)
+  const priorHigh = Number(stock.previousHistoricalHigh)
+  const averageVolume = Number(stock.averageVolume20)
+  const hasIntradayRvol = stock.intradaySessionRvol !== null && stock.intradaySessionRvol !== undefined && Number.isFinite(Number(stock.intradaySessionRvol))
+  const rvol = hasIntradayRvol
+    ? Number(stock.intradaySessionRvol)
+    : averageVolume > 0 ? Number(stock.currentVolume) / averageVolume : 0
+  const hasHistory = Number.isFinite(dma220) && dma220 > 0 && Number.isFinite(priorHigh) && priorHigh > 0
+  const aboveDma220 = hasHistory && price > dma220
+  const distanceFromHigh = hasHistory ? (price / priorHigh - 1) * 100 : null
+  const eligible = aboveDma220 && distanceFromHigh >= -5
+  const dailyCloseBreak = Number(stock.latestDailyClose) > priorHigh
+  const priceBreak = price > priorHigh
+  const confirmed = eligible && priceBreak && dailyCloseBreak && rvol >= 1.5
+  const status = confirmed ? 'Confirmed breakout' : priceBreak ? 'Breakout watch' : 'Near 5Y high'
+  return { eligible, hasHistory, aboveDma220, distanceFromHigh, rvol, confirmed, status }
+}
+
+function Ath220Dashboard({ stocks, onSelect }) {
+  const [sortConfig, setSortConfig] = useState({ key: 'status', direction: 'desc' })
+  const candidates = stocks
+    .map(stock => ({ stock, setup: getAth220Setup(stock) }))
+    .filter(item => item.setup.eligible)
+    .sort((first, second) => {
+      const valueFor = ({ stock, setup }) => {
+        if (sortConfig.key === 'stock') return stock.s || stock.n || ''
+        if (sortConfig.key === 'status') return setup.confirmed ? 3 : setup.status === 'Breakout watch' ? 2 : 1
+        if (sortConfig.key === 'sessionDate') return stock.intradaySessionDate || ''
+        if (sortConfig.key === 'todayChange') return stock.intradaySessionChange == null ? null : Number(stock.intradaySessionChange)
+        if (sortConfig.key === 'sessionHigh') return stock.intradaySessionRangeHigh == null ? null : Number(stock.intradaySessionRangeHigh)
+        if (sortConfig.key === 'sessionVolume') return stock.intradaySessionVolume == null ? null : Number(stock.intradaySessionVolume)
+        if (sortConfig.key === 'price') return Number(stock.currentPrice)
+        if (sortConfig.key === 'dma220') return Number(stock.dma220)
+        if (sortConfig.key === 'dmaDistance') return Number(stock.currentPrice) / Number(stock.dma220) - 1
+        if (sortConfig.key === 'priorHigh') return Number(stock.previousHistoricalHigh)
+        if (sortConfig.key === 'highDistance') return setup.distanceFromHigh
+        if (sortConfig.key === 'volumeRatio') return stock.intradaySessionRvol == null ? null : Number(stock.intradaySessionRvol)
+        if (sortConfig.key === 'rsi') return Number(stock.rsi)
+        return 0
+      }
+      const firstValue = valueFor(first)
+      const secondValue = valueFor(second)
+      if (typeof firstValue === 'string' || typeof secondValue === 'string') {
+        const difference = String(firstValue ?? '').localeCompare(String(secondValue ?? ''))
+        return sortConfig.direction === 'asc' ? difference : -difference
+      }
+      if (firstValue == null || !Number.isFinite(Number(firstValue))) return secondValue == null || !Number.isFinite(Number(secondValue)) ? 0 : 1
+      if (secondValue == null || !Number.isFinite(Number(secondValue))) return -1
+      const difference = Number(firstValue) - Number(secondValue)
+      return sortConfig.direction === 'asc' ? difference : -difference
+    })
+
+  const requestSort = key => setSortConfig(current => ({
+    key,
+    direction: current.key === key ? (current.direction === 'asc' ? 'desc' : 'asc') : key === 'stock' || key === 'sessionDate' ? 'asc' : 'desc'
+  }))
+  const sortHeader = (label, key) => <button className="sort-header" onClick={() => requestSort(key)}>{label} <span>{sortConfig.key === key ? (sortConfig.direction === 'asc' ? '↑' : '↓') : '↕'}</span></button>
+
+  return (
+    <section className="card analysis-section stock-screener ath220-dashboard">
+      <div className="dividend-heading">
+        <div><h2>220 DMA + 5Y HIGH BREAKOUT</h2><p>Trend filter with prior-high breakout and volume confirmation. Today metrics use the latest available NSE/BSE session.</p></div>
+        <span className="dividend-count">{candidates.length} setups</span>
+      </div>
+      <div className="screener-rules">Requires 220+ daily candles · Price above 220 DMA · Within 5% of the prior high in available 5-year history · Confirmed = daily close above prior high and 20D relative volume ≥ 1.5×</div>
+      {candidates.length === 0 ? <div className="no-results">No stocks currently match this setup. More than 220 daily observations are required.</div> : (
+        <div className="table-wrapper"><table className="analysis-table screener-table"><thead><tr><th>{sortHeader('Stock', 'stock')}</th><th>{sortHeader('Setup status', 'status')}</th><th>{sortHeader('Session date', 'sessionDate')}</th><th>{sortHeader('Today change', 'todayChange')}</th><th>Today O / H / L</th><th>{sortHeader('Today volume', 'sessionVolume')}</th><th>{sortHeader('Price', 'price')}</th><th>{sortHeader('220 DMA', 'dma220')}</th><th>{sortHeader('vs 220 DMA', 'dmaDistance')}</th><th>{sortHeader('Prior 5Y high', 'priorHigh')}</th><th>{sortHeader('vs 5Y high', 'highDistance')}</th><th>{sortHeader('RSI', 'rsi')}</th></tr></thead><tbody>{candidates.map(({ stock, setup }) => (
+          <tr key={stock.symbol} onClick={() => onSelect(stock)}><td className="stock-name"><strong>{stock.s}</strong><small>{stock.n} · {stock.sector}</small></td><td><span className={`ath220-status ${setup.confirmed ? 'confirmed' : ''}`}>{setup.status}</span></td><td>{stock.intradaySessionDate ? new Date(`${stock.intradaySessionDate}T12:00:00Z`).toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' }) : 'Unavailable'}</td><td className={stock.intradaySessionChange !== null && Number(stock.intradaySessionChange) >= 0 ? 'positive' : 'negative'}>{stock.intradaySessionDate && stock.intradaySessionChange !== null && Number.isFinite(Number(stock.intradaySessionChange)) ? `${Number(stock.intradaySessionChange) >= 0 ? '+' : ''}${Number(stock.intradaySessionChange).toFixed(2)}%` : 'Unavailable'}</td><td>{stock.intradaySessionDate && stock.intradaySessionOpen !== null && stock.intradaySessionRangeHigh !== null && stock.intradaySessionRangeLow !== null ? `₹${Number(stock.intradaySessionOpen).toFixed(2)} / ₹${Number(stock.intradaySessionRangeHigh).toFixed(2)} / ₹${Number(stock.intradaySessionRangeLow).toFixed(2)}` : 'Unavailable'}</td><td>{stock.intradaySessionDate && stock.intradaySessionRvol !== null && stock.intradaySessionRvol !== undefined && Number.isFinite(Number(stock.intradaySessionRvol)) ? `${Number(stock.intradaySessionVolume).toLocaleString('en-IN')} / ${Number(stock.intradaySessionRvol).toFixed(2)}×` : 'Unavailable'}</td><td>₹{Number(stock.currentPrice).toFixed(2)}</td><td>₹{Number(stock.dma220).toFixed(2)}</td><td>{((Number(stock.currentPrice) / Number(stock.dma220) - 1) * 100).toFixed(1)}%</td><td>₹{Number(stock.previousHistoricalHigh).toFixed(2)}</td><td>{setup.distanceFromHigh.toFixed(1)}%</td><td>{Number(stock.rsi).toFixed(1)}</td></tr>
+        ))}</tbody></table></div>
+      )}
+    </section>
+  )
+}
+
 function StockScreener({ stocks, onSelect }) {
+  const [sortConfig, setSortConfig] = useState({ key: 'marketCap', direction: 'desc' })
+  const sortedStocks = useMemo(() => [...stocks].sort((first, second) => {
+    const valueFor = stock => {
+      if (sortConfig.key === 'stock') return stock.n || stock.s
+      if (sortConfig.key === 'price') return Number(stock.currentPrice || 0)
+      if (sortConfig.key === 'dma') return Number(stock.dma200 || 0)
+      if (sortConfig.key === 'dma20') return Number(stock.dma20 || 0)
+      if (sortConfig.key === 'dma50') return Number(stock.dma50 || 0)
+      if (sortConfig.key === 'dma200') return Number(stock.dma200 || 0)
+      if (sortConfig.key === 'rsi') return Number(stock.rsi || 0)
+      if (sortConfig.key === 'volume') return Number(stock.currentVolume || 0) / Number(stock.averageVolume20 || 1)
+      if (sortConfig.key === 'high20') return Number(stock.previous20High || 0)
+      if (sortConfig.key === 'high52') return Number(stock.high52 || 0)
+      if (sortConfig.key === 'tradedValue') return Number(stock.averageTradedValue || 0)
+      return Number(stock.marketCap || 0)
+    }
+    const firstValue = valueFor(first)
+    const secondValue = valueFor(second)
+    const result = typeof firstValue === 'string' ? firstValue.localeCompare(secondValue) : firstValue - secondValue
+    return sortConfig.direction === 'asc' ? result : -result
+  }), [stocks, sortConfig])
+  const requestSort = key => setSortConfig(current => ({
+    key,
+    direction: current.key === key ? (current.direction === 'asc' ? 'desc' : 'asc') : key === 'stock' ? 'asc' : 'desc'
+  }))
+  const sortHeader = (label, key) => <button className="sort-header" onClick={() => requestSort(key)}>{label} <span>{sortConfig.key === key ? (sortConfig.direction === 'asc' ? '↑' : '↓') : '↕'}</span></button>
+
   return (
     <section className="card analysis-section stock-screener">
       <div className="dividend-heading">
@@ -2160,7 +2432,7 @@ function StockScreener({ stocks, onSelect }) {
       </div>
       <div className="screener-rules">Market cap &gt; ₹2,000 Cr · RSI 55–70 · Volume &gt; 1.5× 20-day average · Close above previous 20-day high · Within 10% of 52-week high · Average traded value &gt; ₹5 Cr/day</div>
       {stocks.length === 0 ? <div className="no-results">No stocks currently pass all screener rules. Market data or market-cap data may still be loading.</div> : (
-        <div className="table-wrapper"><table className="analysis-table screener-table"><thead><tr><th>Stock</th><th>Market Cap</th><th>Price / 200 DMA</th><th>20 / 50 / 200 DMA</th><th>RSI</th><th>Volume</th><th>20D High</th><th>52W High</th><th>Avg traded value</th></tr></thead><tbody>{stocks.map(stock => (
+        <div className="table-wrapper"><table className="analysis-table screener-table"><thead><tr><th>{sortHeader('Stock', 'stock')}</th><th>{sortHeader('Market Cap', 'marketCap')}</th><th>{sortHeader('Price / 200 DMA', 'price')}</th><th>{sortHeader('20 / 50 / 200 DMA', 'dma20')}</th><th>{sortHeader('RSI', 'rsi')}</th><th>{sortHeader('Volume', 'volume')}</th><th>{sortHeader('20D High', 'high20')}</th><th>{sortHeader('52W High', 'high52')}</th><th>{sortHeader('Avg traded value', 'tradedValue')}</th></tr></thead><tbody>{sortedStocks.map(stock => (
           <tr key={stock.symbol} onClick={() => onSelect(stock)}><td className="stock-name"><strong>{stock.s}</strong><small>{stock.n} · {stock.sector}</small></td><td>₹{(stock.marketCap / 10000000).toLocaleString('en-IN', { maximumFractionDigits: 0 })} Cr</td><td>₹{stock.currentPrice.toFixed(2)} / ₹{stock.dma200.toFixed(2)}</td><td>{stock.dma20.toFixed(2)} / {stock.dma50.toFixed(2)} / {stock.dma200.toFixed(2)}</td><td>{stock.rsi.toFixed(1)}</td><td>{(stock.currentVolume / stock.averageVolume20).toFixed(2)}×</td><td>₹{stock.previous20High.toFixed(2)}</td><td>₹{stock.high52.toFixed(2)}</td><td>₹{(stock.averageTradedValue / 10000000).toFixed(1)} Cr</td></tr>
         ))}</tbody></table></div>
       )}

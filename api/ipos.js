@@ -1,5 +1,6 @@
 const NSE_IPO_URL = 'https://www.nseindia.com/api/ipo-current-issue'
 const IPO_HISTORY_URL = 'https://ipocentral.in/ipo-2026/'
+const NSE_EQUITY_URL = 'https://archives.nseindia.com/content/equities/EQUITY_L.csv'
 
 const read = (item, names) => {
   for (const name of names) {
@@ -12,6 +13,52 @@ const formatDate = value => {
   if (!value) return ''
   const parsed = new Date(value)
   return Number.isNaN(parsed.getTime()) ? String(value) : parsed.toISOString().slice(0, 10)
+}
+
+const normalizeCompany = value => String(value || '').toLowerCase().replace(/\b(limited|ltd|india|private|pvt|inc|corporation|company)\b/g, ' ').replace(/[&.,()-]/g, ' ').replace(/\s+/g, ' ').trim()
+const parseCsvLine = line => {
+  const fields = []
+  let field = ''
+  let quoted = false
+  for (let index = 0; index < line.length; index += 1) {
+    const character = line[index]
+    const nextCharacter = line[index + 1]
+    if (character === '"' && quoted && nextCharacter === '"') { field += '"'; index += 1 }
+    else if (character === '"') quoted = !quoted
+    else if (character === ',' && !quoted) { fields.push(field.trim()); field = '' }
+    else field += character
+  }
+  fields.push(field.trim())
+  return fields
+}
+
+const enrichListedIpos = async (ipos) => {
+  if (!ipos.length) return ipos
+  try {
+    const response = await fetch(NSE_EQUITY_URL, { headers: { 'User-Agent': 'Mozilla/5.0 Stock Pulse India', Accept: 'text/csv' } })
+    if (!response.ok) return ipos
+    const rows = (await response.text()).split(/\r?\n/).filter(Boolean).slice(1).map(parseCsvLine)
+    const securities = rows.filter(fields => fields[0] && fields[1] && fields[2] === 'EQ').map(fields => ({ symbol: fields[0], name: normalizeCompany(fields[1]) }))
+    const withSymbols = ipos.map(ipo => {
+      if (ipo.symbol) return ipo
+      const name = normalizeCompany(ipo.company)
+      const exact = securities.find(security => security.name === name)
+      const partial = exact || (name.length > 7 ? securities.find(security => security.name.length > 5 && (security.name.includes(name) || name.includes(security.name))) : null)
+      return partial ? { ...ipo, symbol: partial.symbol } : ipo
+    })
+    return Promise.all(withSymbols.map(async ipo => {
+      if (!ipo.symbol || ipo.currentPrice) return ipo
+      try {
+        const quoteResponse = await fetch(`https://query1.finance.yahoo.com/v8/finance/chart/${encodeURIComponent(`${ipo.symbol}.NS`)}?range=1d&interval=1d`, { headers: { 'User-Agent': 'Mozilla/5.0 Stock Pulse India' } })
+        const price = Number((await quoteResponse.json())?.chart?.result?.[0]?.meta?.regularMarketPrice)
+        return Number.isFinite(price) && price > 0 ? { ...ipo, currentPrice: String(price) } : ipo
+      } catch {
+        return ipo
+      }
+    }))
+  } catch {
+    return ipos
+  }
 }
 
 const getStatus = (item, openDate, closeDate, listingDate) => {
@@ -81,7 +128,8 @@ export default async function handler(request, response) {
     }
     const currentIpos = items.map(normalizeIpo)
     const currentNames = new Set(currentIpos.map(ipo => ipo.company.toLowerCase()))
-    const ipos = [...currentIpos, ...historicalIpos.filter(ipo => !currentNames.has(ipo.company.toLowerCase()))]
+    const enrichedHistoricalIpos = await enrichListedIpos(historicalIpos)
+    const ipos = [...currentIpos, ...enrichedHistoricalIpos.filter(ipo => !currentNames.has(ipo.company.toLowerCase()))]
     response.setHeader('Cache-Control', 's-maxage=300, stale-while-revalidate=600')
     return response.status(200).json({ source: 'NSE + IPO Central', updatedAt: new Date().toISOString(), ipos })
   } catch (error) {

@@ -131,9 +131,10 @@ export const calculateATR = (high, low, close, period = 14) => {
   return calculateSMA(tr, period)
 }
 
-export const calculateRiskLevels = ({ currentPrice, support, resistance, atr, bias }) => {
+export const calculateRiskLevels = ({ currentPrice, support, resistance, atr, bias, maxMove }) => {
   const price = Number(currentPrice)
   const volatility = Number.isFinite(Number(atr)) && Number(atr) > 0 ? Number(atr) : price * 0.015
+  const maximumMove = Number.isFinite(Number(maxMove)) && Number(maxMove) > 0 ? Number(maxMove) : Infinity
   const supportLevel = Number.isFinite(Number(support)) && Number(support) > 0 ? Number(support) : price - volatility
   const resistanceLevel = Number.isFinite(Number(resistance)) && Number(resistance) > 0 ? Number(resistance) : price + volatility
   const buffer = Math.max(volatility * 0.15, price * 0.0025)
@@ -141,20 +142,20 @@ export const calculateRiskLevels = ({ currentPrice, support, resistance, atr, bi
   if (bias === 'Bearish') {
     const stopLoss = Math.max(price + volatility * 0.8, resistanceLevel + buffer)
     const risk = stopLoss - price
-    const target = Math.min(price - risk * 1.5, supportLevel < price ? supportLevel : price - risk * 1.5)
+    const target = Math.max(price - Math.min(risk * 1.5, maximumMove), supportLevel < price ? supportLevel : price - Math.min(risk * 1.5, maximumMove))
     return { target: Number(target.toFixed(2)), stopLoss: Number(stopLoss.toFixed(2)), direction: 'Short' }
   }
 
   if (bias === 'Bullish') {
     const stopLoss = Math.min(price - volatility * 0.8, supportLevel - buffer)
     const risk = price - stopLoss
-    const target = Math.max(price + risk * 1.5, resistanceLevel > price ? resistanceLevel : price + risk * 1.5)
+    const target = Math.min(price + Math.min(risk * 1.5, maximumMove), resistanceLevel > price ? resistanceLevel : price + Math.min(risk * 1.5, maximumMove))
     return { target: Number(target.toFixed(2)), stopLoss: Number(stopLoss.toFixed(2)), direction: 'Long' }
   }
 
   return {
-    target: Number((resistanceLevel > price ? resistanceLevel : price + volatility * 1.5).toFixed(2)),
-    stopLoss: Number((supportLevel < price ? supportLevel : price - volatility).toFixed(2)),
+    target: Number((price + Math.min(resistanceLevel > price ? resistanceLevel - price : volatility * 1.5, maximumMove)).toFixed(2)),
+    stopLoss: Number((price - Math.min(price - (supportLevel < price ? supportLevel : price - volatility), maximumMove)).toFixed(2)),
     direction: 'Neutral'
   }
 }

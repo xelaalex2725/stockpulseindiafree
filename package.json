@@ -5,7 +5,7 @@
   "type": "module",
   "scripts": {
     "dev": "concurrently \"npm run server\" \"vite --host 0.0.0.0\"",
-    "server": "node server.js",
+    "server": "node --env-file-if-exists=.env server.js",
     "dev:all": "npm run dev",
     "build": "vite build",
     "preview": "vite preview"

@@ -40,6 +40,16 @@ The in-site **Dividends** tab reads the official NSE corporate-actions RSS feed 
 
 After deployment, use the Vercel-provided URL or connect a custom domain from **Vercel > Project Settings > Domains**. The local `server.js` remains available for local development.
 
+## AI stock analysis
+The stock detail panel requests an AI scenario analysis when a stock is opened. It uses the available chart pattern, trend, momentum, volume, VWAP, fundamentals, and related headlines to estimate the chance of a positive price return over the next 20 trading sessions. The estimate is not statistically calibrated or guaranteed.
+
+Configure the server-side environment variables before using this feature:
+- `OPENAI_API_KEY` (required; keep it on the server and never add it to a `VITE_` variable)
+- `OPENAI_MODEL` (optional; defaults to `gpt-4o-mini`)
+- `OPENAI_BASE_URL` (optional; defaults to `https://api.openai.com/v1`)
+
+For local development, copy `.env.example` to `.env`, replace the placeholder with your provider key, and restart `npm run dev`. The local server loads `.env`; the real file is ignored by Git. For Vercel, add the variables under **Project Settings > Environment Variables** and redeploy. Without the key, the analysis panel reports that AI analysis is not configured.
+
 ### Netlify
 Import the GitHub repo and use:
 - Build command: `npm run build`

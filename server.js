@@ -1,12 +1,22 @@
 import express from 'express'
 import cors from 'cors'
 import fetch from 'node-fetch'
+import { generateStockAnalysis } from './lib/stockAnalysis.js'
 
 const app = express()
 const PORT = 3001
+const EXCLUDED_BSE_SYMBOLS = new Set(['500730'])
 
 app.use(cors())
 app.use(express.json())
+
+app.post('/api/analysis', async (req, res) => {
+  try {
+    res.json(await generateStockAnalysis(req.body || {}, fetch))
+  } catch (error) {
+    res.status(error.status || 502).json({ error: error.message || 'Unable to generate stock analysis.' })
+  }
+})
 
 // Health check endpoint
 app.get('/health', (req, res) => {
@@ -44,7 +54,7 @@ app.get('/api/stocks', async (req, res) => {
       .map(fields => ({ s: fields[0], n: fields[1] || fields[0], symbol: `${fields[0]}.NS`, sector: industryBySymbol.get(fields[0]) || 'Unclassified' }))
     const bsePayload = bseResponse.ok ? await bseResponse.json() : []
     const bseStocks = (Array.isArray(bsePayload) ? bsePayload : bsePayload?.Table || bsePayload?.data || [])
-      .filter(item => item?.SCRIP_CD && item?.Scrip_Name && item?.Status !== 'Suspended')
+      .filter(item => item?.SCRIP_CD && item?.Scrip_Name && item?.Status !== 'Suspended' && !EXCLUDED_BSE_SYMBOLS.has(String(item.SCRIP_CD)))
       .map(item => ({ s: String(item.SCRIP_CD), n: String(item.Scrip_Name).trim(), symbol: `${item.SCRIP_CD}.BO`, sector: 'Unclassified' }))
     res.set('Cache-Control', 'public, max-age=3600')
     res.json({ updatedAt: new Date().toISOString(), stocks: [...nseStocks, ...bseStocks] })
@@ -92,6 +102,44 @@ const parseNewsRss = (xml, source) => [...xml.matchAll(/<item>([\s\S]*?)<\/item>
     }
   })
   .filter(article => article.title && article.link)
+
+const normalizeIpoCompany = value => String(value || '').toLowerCase().replace(/\b(limited|ltd|india|private|pvt|inc|corporation|company)\b/g, ' ').replace(/[&.,()-]/g, ' ').replace(/\s+/g, ' ').trim()
+const parseIpoCsvLine = line => {
+  const fields = []
+  let field = ''
+  let quoted = false
+  for (let index = 0; index < line.length; index += 1) {
+    const character = line[index]
+    const nextCharacter = line[index + 1]
+    if (character === '"' && quoted && nextCharacter === '"') { field += '"'; index += 1 }
+    else if (character === '"') quoted = !quoted
+    else if (character === ',' && !quoted) { fields.push(field.trim()); field = '' }
+    else field += character
+  }
+  fields.push(field.trim())
+  return fields
+}
+const enrichListedIpos = async ipos => {
+  if (!ipos.length) return ipos
+  try {
+    const response = await fetch('https://archives.nseindia.com/content/equities/EQUITY_L.csv', { headers: { 'User-Agent': 'Mozilla/5.0 Stock Pulse India', Accept: 'text/csv' } })
+    if (!response.ok) return ipos
+    const securities = (await response.text()).split(/\r?\n/).filter(Boolean).slice(1).map(parseIpoCsvLine).filter(fields => fields[0] && fields[1] && fields[2] === 'EQ').map(fields => ({ symbol: fields[0], name: normalizeIpoCompany(fields[1]) }))
+    const withSymbols = ipos.map(ipo => {
+      const name = normalizeIpoCompany(ipo.company)
+      const match = securities.find(security => security.name === name) || (name.length > 7 ? securities.find(security => security.name.length > 5 && (security.name.includes(name) || name.includes(security.name))) : null)
+      return match ? { ...ipo, symbol: match.symbol } : ipo
+    })
+    return Promise.all(withSymbols.map(async ipo => {
+      if (!ipo.symbol || ipo.currentPrice) return ipo
+      try {
+        const quote = await fetch(`https://query1.finance.yahoo.com/v8/finance/chart/${encodeURIComponent(`${ipo.symbol}.NS`)}?range=1d&interval=1d`, { headers: { 'User-Agent': 'Mozilla/5.0 Stock Pulse India' } })
+        const price = Number((await quote.json())?.chart?.result?.[0]?.meta?.regularMarketPrice)
+        return Number.isFinite(price) && price > 0 ? { ...ipo, currentPrice: String(price) } : ipo
+      } catch { return ipo }
+    }))
+  } catch { return ipos }
+}
 
 app.get('/api/dividends', async (req, res) => {
   try {
@@ -165,7 +213,8 @@ app.get('/api/ipos', async (req, res) => {
       console.warn('Historical IPO feed unavailable:', historyError.message)
     }
     const currentNames = new Set(currentIpos.map(ipo => ipo.company.toLowerCase()))
-    const ipos = [...currentIpos, ...historicalIpos.filter(ipo => !currentNames.has(ipo.company.toLowerCase()))]
+    const enrichedHistoricalIpos = await enrichListedIpos(historicalIpos)
+    const ipos = [...currentIpos, ...enrichedHistoricalIpos.filter(ipo => !currentNames.has(ipo.company.toLowerCase()))]
     res.set('Cache-Control', 'public, max-age=300')
     res.json({ source: 'NSE + IPO Central', updatedAt: new Date().toISOString(), ipos })
   } catch (error) {

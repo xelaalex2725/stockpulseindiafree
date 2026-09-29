@@ -23,6 +23,8 @@ const parseCsvLine = (line) => {
   return fields
 }
 
+const EXCLUDED_BSE_SYMBOLS = new Set(['500730'])
+
 export default async function handler(request, response) {
   try {
     const [sourceResponse, bseResponse, industryResponse] = await Promise.all([
@@ -45,7 +47,7 @@ export default async function handler(request, response) {
       }))
     const bsePayload = bseResponse.ok ? await bseResponse.json() : []
     const bseSymbols = (Array.isArray(bsePayload) ? bsePayload : bsePayload?.Table || bsePayload?.data || [])
-      .filter(item => item?.SCRIP_CD && item?.Scrip_Name && item?.Status !== 'Suspended')
+      .filter(item => item?.SCRIP_CD && item?.Scrip_Name && item?.Status !== 'Suspended' && !EXCLUDED_BSE_SYMBOLS.has(String(item.SCRIP_CD)))
       .map(item => ({ s: String(item.SCRIP_CD), n: String(item.Scrip_Name).trim(), symbol: `${item.SCRIP_CD}.BO`, sector: 'Unclassified' }))
 
     response.setHeader('Cache-Control', 's-maxage=3600, stale-while-revalidate=7200')
