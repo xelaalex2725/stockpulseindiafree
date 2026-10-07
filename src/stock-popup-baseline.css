@@ -258,6 +258,34 @@
   background: linear-gradient(135deg, #dcecff, #d9faf2);
 }
 
+.detail-panel .detail-bulk-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 7px;
+  margin: 0 0 8px;
+}
+
+.detail-panel .detail-bulk-actions button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 5px;
+  min-height: 30px;
+  padding: 5px 9px;
+  border: 1px solid #d2e1ed;
+  border-radius: 6px;
+  background: #f4f8fc;
+  color: #31546f;
+  font: 700 10px Manrope;
+  cursor: pointer;
+}
+
+.detail-panel .detail-bulk-actions button:hover {
+  border-color: #8acbbb;
+  background: #e9f7f3;
+  color: #087d65;
+}
+
 .detail-panel .stock-summary,
 .detail-panel .support-resistance,
 .detail-panel .pattern-analysis,
@@ -307,6 +335,22 @@
   border-bottom: 1px solid #d9e3ed;
 }
 
+.detail-panel .panel-content > .financials-section,
+.detail-panel .panel-content > .shareholding-section {
+  margin: 0 0 10px;
+  padding: 0;
+  border: 0;
+  border-bottom: 1px solid #d9e3ed;
+  border-radius: 0;
+  background: transparent;
+}
+
+.detail-panel .financials-section[open] > :not(summary),
+.detail-panel .shareholding-section[open] > :not(summary) {
+  margin-left: 4px;
+  margin-right: 4px;
+}
+
 .detail-panel .detail-disclosure-heading {
   display: flex;
   align-items: center;
@@ -317,6 +361,68 @@
   cursor: pointer;
   list-style: none;
   user-select: none;
+}
+
+.detail-panel .panel-content > details > summary {
+  min-height: 46px;
+  margin-bottom: 8px;
+  padding: 9px 12px;
+  border-left: 3px solid #3474bd;
+  border-radius: 6px;
+  background: #edf5ff;
+  color: #183b62;
+  transition: background-color .16s ease, border-color .16s ease;
+}
+
+.detail-panel .panel-content > details:nth-of-type(7n + 2) > summary {
+  border-left-color: #128774;
+  background: #e9f7f3;
+  color: #155749;
+}
+
+.detail-panel .panel-content > details:nth-of-type(7n + 3) > summary {
+  border-left-color: #c68620;
+  background: #fff5e4;
+  color: #735018;
+}
+
+.detail-panel .panel-content > details:nth-of-type(7n + 4) > summary {
+  border-left-color: #d46b58;
+  background: #fff0ed;
+  color: #713b33;
+}
+
+.detail-panel .panel-content > details:nth-of-type(7n + 5) > summary {
+  border-left-color: #53804c;
+  background: #eff6ea;
+  color: #385735;
+}
+
+.detail-panel .panel-content > details:nth-of-type(7n + 6) > summary {
+  border-left-color: #397f99;
+  background: #eaf5f8;
+  color: #225263;
+}
+
+.detail-panel .panel-content > details:nth-of-type(7n) > summary {
+  border-left-color: #66728c;
+  background: #f0f2f7;
+  color: #3c4a63;
+}
+
+.detail-panel .panel-content > details[open] > summary {
+  margin-bottom: 8px;
+  box-shadow: inset 0 0 0 1px rgba(61, 84, 117, .08);
+}
+
+.detail-panel .panel-content > details > summary:hover {
+  filter: brightness(.98);
+}
+
+.detail-panel .panel-content > details > summary .detail-disclosure-chevron,
+.detail-panel .panel-content > details > summary .financials-toggle-icon {
+  color: currentColor;
+  opacity: .72;
 }
 
 .detail-panel .detail-disclosure-heading::-webkit-details-marker {

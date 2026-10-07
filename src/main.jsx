@@ -6,7 +6,7 @@ import { calculateAiStockScore } from '../lib/aiStockScore.js'
 import {
   BarChart3, Bell, BookOpen, ExternalLink, Gauge, Globe2, Layers3, LineChart,
   Menu, Newspaper, RefreshCw, Search, ShieldCheck, Sparkles, Star, TrendingDown, TrendingUp, X,
-  AlertCircle, CheckCircle, Zap, Activity, Send, Bot, Download, ChevronDown, Trash2, Power
+  AlertCircle, CheckCircle, Zap, Activity, Send, Bot, Download, ChevronDown, ChevronUp, Trash2, Power
 } from 'lucide-react'
 import { ResponsiveContainer, BarChart, Bar, Brush, XAxis, YAxis, Tooltip, Line } from 'recharts'
 import { calculateEMA, calculateSMA, calculateRSI, calculateMACD, calculateADX, calculateATR, calculateVWAP, detectChartPattern, calculateMarketStructure, calculateSuportResistance, calculateVolumAnalysis, calculateRiskLevels, scoreSetup } from './technicalAnalysis'
@@ -784,9 +784,11 @@ function AlertManager({ stocks, stockDirectory, rules, onCreate, onToggle, onDel
     {rules.length === 0 ? <div className="no-results">No custom alerts yet.</div> : <div className="custom-alert-list">
       {rules.map(rule => {
         const status = rule.lastTriggeredAt ? 'Triggered' : rule.enabled ? 'Active' : 'Paused'
+        const alertStock = stockOptions.find(stock => stock.symbol === rule.symbol)
+        const currentPrice = Number(alertStock?.currentPrice)
         return <article className={`custom-alert-row ${rule.enabled ? 'enabled' : 'disabled'}`} key={rule.id}>
           <span className="custom-alert-status" aria-label={status} title={status}>{rule.enabled ? <Bell size={15} /> : <span className="custom-alert-status-dot" />}</span>
-          <div className="custom-alert-description"><strong>{stockOptions.find(stock => stock.symbol === rule.symbol)?.s || rule.symbol}</strong><span>{describeRule(rule)}</span></div>
+          <div className="custom-alert-description"><strong>{alertStock?.s || rule.symbol}<span className={`custom-alert-price ${Number.isFinite(currentPrice) && currentPrice > 0 ? '' : 'unavailable'}`}>{Number.isFinite(currentPrice) && currentPrice > 0 ? `₹${currentPrice.toFixed(2)}` : 'Price unavailable'}</span></strong><span>{describeRule(rule)}</span></div>
           <span className={`custom-alert-state ${rule.lastTriggeredAt ? 'triggered' : ''}`}>{status}</span>
           <div className="custom-alert-actions">
             <button type="button" onClick={() => onToggle(rule.id)} title={rule.enabled ? 'Pause alert' : 'Re-enable alert'} aria-label={`${rule.enabled ? 'Pause' : 'Re-enable'} alert for ${rule.symbol}`}><Power size={15} /></button>
@@ -797,7 +799,6 @@ function AlertManager({ stocks, stockDirectory, rules, onCreate, onToggle, onDel
     </div>}
   </section>
 }
-
 const clampScore = (value) => Math.round(Math.min(100, Math.max(0, value)))
 const getDvmTone = (dvm = 0) => {
   const recommendation = typeof dvm === 'object' ? dvm?.recommendation : null
@@ -2814,6 +2815,8 @@ function ShareholdingSection({ shareholding, loading, error }) {
 }
 
 function StockDetailPanel({ stock, newsArticles, onClose, isWatched, onToggleWatchlist }) {
+  const panelContentRef = useRef(null)
+  const [allDetailsExpanded, setAllDetailsExpanded] = useState(null)
   const [selectedTimeframe, setSelectedTimeframe] = useState('oneYear')
   const [chartData, setChartData] = useState([])
   const [chartLoading, setChartLoading] = useState(true)
@@ -2881,6 +2884,13 @@ function StockDetailPanel({ stock, newsArticles, onClose, isWatched, onToggleWat
     return () => { cancelled = true }
   }, [stock.symbol])
 
+  useEffect(() => {
+    if (allDetailsExpanded === null) return
+    panelContentRef.current?.querySelectorAll('details').forEach(details => {
+      details.open = allDetailsExpanded
+    })
+  }, [allDetailsExpanded, financials, financialsLoading])
+
   const changeZoom = (direction) => {
     setZoomRange(current => {
       const startIndex = current.startIndex || 0
@@ -2893,6 +2903,9 @@ function StockDetailPanel({ stock, newsArticles, onClose, isWatched, onToggleWat
   }
 
   const prosCons = getStockProsCons(stock, financials)
+  const detailDvm = calculateAiStockScore(stock, financials)
+  const detailStock = { ...stock, dvm: detailDvm }
+  const detailProsCons = getStockProsCons(detailStock, financials)
   const relatedNews = getRelatedNews(stock, newsArticles || [])
   const downloadStockReport = () => {
     const doc = new jsPDF({ unit: 'pt', format: 'a4' })
@@ -2994,10 +3007,10 @@ function StockDetailPanel({ stock, newsArticles, onClose, isWatched, onToggleWat
       ['Risk-reward', reportValue(stock.riskReward)]
     ], [208, 138, 34])
     addSection('DVM and probability', [
-      ['Overall AI stock score', `${reportValue(stock.dvm?.score)}/100 - ${getDvmStatus(stock.dvm)}`],
-      ['Durability / valuation / momentum', [stock.dvm?.durability, stock.dvm?.valuation, stock.dvm?.momentum].map(value => `${reportValue(value)}/100`).join(' / ')],
-      ['Growth / quality / technical', [stock.dvm?.growth, stock.dvm?.quality, stock.dvm?.technical].map(value => `${reportValue(value)}/100`).join(' / ')],
-      ['Fundamental data coverage', stock.dvm?.coverage || 'Limited'],
+      ['Overall AI stock score', `${reportValue(detailDvm.score)}/100 - ${getDvmStatus(detailDvm)}`],
+      ['Durability / valuation / momentum', [detailDvm.durability, detailDvm.valuation, detailDvm.momentum].map(value => `${reportValue(value)}/100`).join(' / ')],
+      ['Growth / quality / technical', [detailDvm.growth, detailDvm.quality, detailDvm.technical].map(value => `${reportValue(value)}/100`).join(' / ')],
+      ['Fundamental data coverage', detailDvm.coverage || 'Limited'],
       ['Profit probability', `${reportValue(stock.profitProbability)}%`],
       ['Intraday / swing bias', `${stock.intradayBias || 'Neutral'} / ${stock.swingBias || 'Neutral'}`]
     ], [139, 98, 201])
@@ -3021,8 +3034,8 @@ function StockDetailPanel({ stock, newsArticles, onClose, isWatched, onToggleWat
     }
 
     addSection('Pros and cons', [
-      ['Pros', prosCons.pros.join(' | ') || '0'],
-      ['Cons', prosCons.cons.join(' | ') || '0']
+      ['Pros', detailProsCons.pros.join(' | ') || '0'],
+      ['Cons', detailProsCons.cons.join(' | ') || '0']
     ], [224, 82, 82])
 
     if (relatedNews.length) {
@@ -3065,17 +3078,17 @@ function StockDetailPanel({ stock, newsArticles, onClose, isWatched, onToggleWat
           </div>
           <p>{stock.c} | {resolveSector(stock)}</p>
           <div className="popup-dvm-summary">
-            <strong>Overall: {stock.dvm?.score || 0}/100 — {getDvmStatus(stock.dvm)}</strong>
-            <small>Six-factor, rules-based score · {stock.dvm?.coverage || 'Limited'} fundamental coverage</small>
+            <strong>{financialsLoading ? 'Overall: Calculating score…' : `Overall: ${detailDvm.score}/100 — ${getDvmStatus(detailDvm)}`}</strong>
+            <small>{financialsLoading ? 'Loading latest fundamentals' : `Six-factor, rules-based score · ${detailDvm.coverage} fundamental coverage`}</small>
             <div className="popup-dvm-factors" aria-label="AI stock score factors">
               {[
-                ['Durability', stock.dvm?.durability],
-                ['Valuation', stock.dvm?.valuation],
-                ['Momentum', stock.dvm?.momentum],
-                ['Growth', stock.dvm?.growth],
-                ['Quality', stock.dvm?.quality],
-                ['Technical', stock.dvm?.technical]
-              ].map(([label, value]) => <span key={label}><small>{label}</small><b>{value ?? 'N/A'}</b></span>)}
+                ['Durability', detailDvm.durability],
+                ['Valuation', detailDvm.valuation],
+                ['Momentum', detailDvm.momentum],
+                ['Growth', detailDvm.growth],
+                ['Quality', detailDvm.quality],
+                ['Technical', detailDvm.technical]
+              ].map(([label, value]) => <span key={label}><small>{label}</small><b>{financialsLoading ? '…' : value ?? 'N/A'}</b></span>)}
             </div>
           </div>
         </div>
@@ -3100,7 +3113,7 @@ function StockDetailPanel({ stock, newsArticles, onClose, isWatched, onToggleWat
         <button onClick={onClose} className="close-btn"><X size={24} /></button>
       </div>
 
-      <div className="panel-content">
+      <div className="panel-content" ref={panelContentRef}>
         <div className="price-section">
           <div className="current-price">
             <span>Current Price</span>
@@ -3109,6 +3122,11 @@ function StockDetailPanel({ stock, newsArticles, onClose, isWatched, onToggleWat
               {stock.change >= 0 ? '+' : ''}{formatChange(stock.change)}%
             </span>
           </div>
+        </div>
+
+        <div className="detail-bulk-actions" role="group" aria-label="Stock detail sections">
+          <button type="button" onClick={() => setAllDetailsExpanded(true)}><ChevronDown size={14} aria-hidden="true" />Expand all</button>
+          <button type="button" onClick={() => setAllDetailsExpanded(false)}><ChevronUp size={14} aria-hidden="true" />Collapse all</button>
         </div>
 
         <DetailDisclosure title="Stock Summary" className="detail-disclosure-stock-summary">
@@ -3131,11 +3149,11 @@ function StockDetailPanel({ stock, newsArticles, onClose, isWatched, onToggleWat
         <div className="pros-cons-section">
           <div className="pros-cons-column pros">
             <h3>Pros</h3>
-            {prosCons.pros.length ? prosCons.pros.map(pro => <p key={pro}>+ {pro}</p>) : <p>Positive factors are still being evaluated.</p>}
+            {detailProsCons.pros.length ? detailProsCons.pros.map(pro => <p key={pro}>+ {pro}</p>) : <p>Positive factors are still being evaluated.</p>}
           </div>
           <div className="pros-cons-column cons">
             <h3>Cons</h3>
-            {prosCons.cons.length ? prosCons.cons.map(con => <p key={con}>- {con}</p>) : <p>No major warning signal detected by the current model.</p>}
+            {detailProsCons.cons.length ? detailProsCons.cons.map(con => <p key={con}>- {con}</p>) : <p>No major warning signal detected by the current model.</p>}
           </div>
         </div>
         </DetailDisclosure>
