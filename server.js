@@ -2,6 +2,8 @@ import express from 'express'
 import cors from 'cors'
 import fetch from 'node-fetch'
 import { generateStockAnalysis } from './lib/stockAnalysis.js'
+import { buildFinancials, FINANCIAL_TYPES } from './lib/financials.js'
+import { fetchShareholdingHistory } from './lib/shareholding.js'
 
 const app = express()
 const PORT = 3001
@@ -315,56 +317,33 @@ app.get('/api/financials/:symbol', async (req, res) => {
   }
 
   try {
-    const types = ['annualTotalRevenue', 'annualGrossProfit', 'annualOperatingIncome', 'annualNetIncome', 'annualPretaxIncome', 'annualDilutedEPS', 'annualDilutedAverageShares', 'annualCashDividendsPaid', 'annualTotalAssets', 'annualTotalLiabilitiesNetMinorityInterest', 'annualTotalDebt', 'annualStockholdersEquity', 'annualOperatingCashFlow', 'annualFreeCashFlow'].join(',')
-    const period1 = Math.floor(Date.now() / 1000) - 4 * 365 * 24 * 60 * 60
+    const types = FINANCIAL_TYPES.join(',')
+    const period1 = Math.floor(Date.now() / 1000) - 10 * 365 * 24 * 60 * 60
     const period2 = Math.floor(Date.now() / 1000) + 24 * 60 * 60
     const url = `https://query1.finance.yahoo.com/ws/fundamentals-timeseries/v1/finance/timeseries/${encodeURIComponent(symbol)}?type=${types}&merge=false&period1=${period1}&period2=${period2}`
-    const [response, chartResponse] = await Promise.all([
+    const [yahooResponse, chartResponse] = await Promise.all([
       fetch(url, { headers: { 'User-Agent': 'Mozilla/5.0 Stock Pulse India' } }),
       fetch(`https://query1.finance.yahoo.com/v8/finance/chart/${encodeURIComponent(symbol)}?range=1d&interval=1d`, { headers: { 'User-Agent': 'Mozilla/5.0 Stock Pulse India' } })
     ])
-    if (!response.ok) return res.status(response.status).json({ error: `Yahoo Finance returned ${response.status}` })
+    if (!yahooResponse.ok) return res.status(yahooResponse.status).json({ error: `Yahoo Finance returned ${yahooResponse.status}` })
 
-    const body = await response.json()
-    const results = body?.timeseries?.result || []
+    const results = (await yahooResponse.json())?.timeseries?.result || []
     if (!results.length) return res.status(404).json({ error: 'Financial data is unavailable for this symbol' })
-
-    const valueOf = field => field?.raw ?? null
-    const series = (name) => {
-      const rows = results.find(item => item.meta?.type?.[0] === name)?.[name] || []
-      return rows.map(row => valueOf(row.reportedValue)).filter(value => value !== null)
-    }
-    const latest = name => series(name).at(-1) ?? null
-    const previous = name => series(name).at(-2) ?? null
-    const annual = name => latest(`annual${name}`)
-    const growth = name => { const current = annual(name); const prior = previous(name); return current !== null && prior ? current / prior - 1 : null }
-    const revenue = annual('TotalRevenue')
-    const grossProfit = annual('GrossProfit')
-    const pretaxIncome = annual('PretaxIncome')
-    const netIncome = annual('NetIncome')
-    const equity = annual('StockholdersEquity')
-    const assets = annual('TotalAssets')
-    const operatingIncome = annual('OperatingIncome')
     const currentPrice = Number((await chartResponse.json())?.chart?.result?.[0]?.meta?.regularMarketPrice)
-    const eps = annual('DilutedEPS')
-    const shares = annual('DilutedAverageShares')
-    const dividendsPaid = annual('CashDividendsPaid')
-    const dividendPerShare = shares && dividendsPaid ? Math.abs(dividendsPaid) / shares : null
-    const marketCap = currentPrice && shares ? currentPrice * shares : null
-
     res.set('Cache-Control', 'public, max-age=900')
-    res.json({
-      symbol,
-      updatedAt: new Date().toISOString(),
-      currency: 'INR',
-      valuation: { marketCap, pe: currentPrice && eps ? currentPrice / eps : null, forwardPe: null, priceToBook: equity && shares && currentPrice ? currentPrice * shares / equity : null, dividendYield: currentPrice && dividendPerShare ? dividendPerShare / currentPrice : null, shares, dividendPerShare },
-      performance: { revenue, grossProfit, operatingIncome, pretaxIncome, revenueGrowth: growth('TotalRevenue'), earningsGrowth: growth('NetIncome'), profitMargin: revenue ? netIncome / revenue : null, grossMargin: revenue ? grossProfit / revenue : null, operatingMargin: revenue ? operatingIncome / revenue : null, returnOnEquity: equity ? netIncome / equity : null, returnOnAssets: assets ? netIncome / assets : null, eps },
-      balanceSheet: { totalCash: null, totalDebt: annual('TotalDebt'), debtToEquity: equity ? annual('TotalDebt') / equity * 100 : null, currentRatio: null, freeCashFlow: annual('FreeCashFlow'), operatingCashFlow: annual('OperatingCashFlow'), equity, assets },
-      latestYear: { netIncome, totalAssets: assets, totalLiabilities: annual('TotalLiabilitiesNetMinorityInterest'), totalEquity: equity }
-    })
+    res.json(buildFinancials(symbol, results, currentPrice))
   } catch (error) {
     console.error(`Error fetching financials for ${symbol}:`, error.message)
     res.status(502).json({ error: 'Unable to reach Yahoo Finance financials' })
+  }
+})
+
+app.get('/api/shareholding/:symbol', async (req, res) => {
+  try {
+    res.set('Cache-Control', 'public, max-age=1800, stale-while-revalidate=3600')
+    res.json(await fetchShareholdingHistory(req.params.symbol, fetch))
+  } catch (error) {
+    res.status(error.status || 502).json({ error: error.message || 'Unable to fetch NSE shareholding history' })
   }
 })
 

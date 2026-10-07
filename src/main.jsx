@@ -1,14 +1,16 @@
-import React, { useEffect, useMemo, useState } from 'react'
+import React, { useEffect, useMemo, useRef, useState } from 'react'
 import { createRoot } from 'react-dom/client'
 import { jsPDF } from 'jspdf'
 import autoTable from 'jspdf-autotable'
+import { calculateAiStockScore } from '../lib/aiStockScore.js'
 import {
   BarChart3, Bell, BookOpen, ExternalLink, Gauge, Globe2, Layers3, LineChart,
   Menu, Newspaper, RefreshCw, Search, ShieldCheck, Sparkles, Star, TrendingDown, TrendingUp, X,
-  AlertCircle, CheckCircle, Zap, Activity, Send, Bot, Download
+  AlertCircle, CheckCircle, Zap, Activity, Send, Bot, Download, ChevronDown, Trash2, Power
 } from 'lucide-react'
 import { ResponsiveContainer, BarChart, Bar, Brush, XAxis, YAxis, Tooltip, Line } from 'recharts'
 import { calculateEMA, calculateSMA, calculateRSI, calculateMACD, calculateADX, calculateATR, calculateVWAP, detectChartPattern, calculateMarketStructure, calculateSuportResistance, calculateVolumAnalysis, calculateRiskLevels, scoreSetup } from './technicalAnalysis'
+import { ALERT_TYPES, evaluateAlertRules, initializeAlertRule } from '../lib/customAlerts.js'
 import './styles.css'
 import './financials.css'
 import './stock-popup-baseline.css'
@@ -552,6 +554,17 @@ const fetchFinancials = async (symbol) => {
   }
 }
 
+const fetchShareholding = async (symbol) => {
+  try {
+    const response = await fetch(`/api/shareholding/${encodeURIComponent(symbol)}`)
+    if (!response.ok) throw new Error(`Shareholding API returned ${response.status}`)
+    return await response.json()
+  } catch (error) {
+    console.warn(`Failed to fetch shareholding history for ${symbol}:`, error)
+    throw error
+  }
+}
+
 const getIndiaTradingDate = timestamp => {
   if (!Number.isFinite(Number(timestamp))) return null
   const parts = new Intl.DateTimeFormat('en-CA', {
@@ -689,15 +702,113 @@ function MarketAlerts({ alerts, loading, error }) {
   </section>
 }
 
-const clampScore = (value) => Math.round(Math.min(100, Math.max(0, value)))
-const getDvmTone = (score = 0) => score >= 55 ? 'green' : score >= 40 ? 'orange' : 'red'
-const getPatternClass = pattern => `${pattern.direction.toLowerCase()} ${pattern.type.toLowerCase().replace(/\s+/g, '-')}`
-const getDvmStatus = (dvm) => {
-  if (dvm?.isStrongPerformer) return 'Strong Performer'
-  if ((dvm?.score || 0) >= 55) return 'Positive'
-  if ((dvm?.score || 0) >= 40) return 'Watch'
-  return 'Weak'
+const ALERT_AVERAGE_PAIRS = [
+  { fastKey: 'ema20', slowKey: 'ema50', fastLabel: 'EMA 20', slowLabel: 'EMA 50' },
+  { fastKey: 'ema50', slowKey: 'ema200', fastLabel: 'EMA 50', slowLabel: 'EMA 200' },
+  { fastKey: 'dma20', slowKey: 'dma50', fastLabel: 'DMA 20', slowLabel: 'DMA 50' },
+  { fastKey: 'dma50', slowKey: 'dma200', fastLabel: 'DMA 50', slowLabel: 'DMA 200' },
+  { fastKey: 'dma20', slowKey: 'dma200', fastLabel: 'DMA 20', slowLabel: 'DMA 200' }
+]
+
+function AlertManager({ stocks, stockDirectory, rules, onCreate, onToggle, onDelete }) {
+  const stockOptions = dedupeBySymbol([...stocks, ...stockDirectory])
+  const [symbol, setSymbol] = useState('')
+  const [stockQuery, setStockQuery] = useState('')
+  const [showStockSuggestions, setShowStockSuggestions] = useState(false)
+  const [type, setType] = useState('price')
+  const [direction, setDirection] = useState('above')
+  const [threshold, setThreshold] = useState('1500')
+  const [averagePairIndex, setAveragePairIndex] = useState(0)
+
+  useEffect(() => {
+    if (!symbol && !stockQuery.trim() && stockOptions.length) {
+      setSymbol(stockOptions[0].symbol)
+      setStockQuery(`${stockOptions[0].s} · ${stockOptions[0].n}`)
+    }
+  }, [stockOptions, stockQuery, symbol])
+
+  const matchingStocks = stockOptions.filter(stock => !stockQuery.trim() || `${stock.s} ${stock.n} ${stock.symbol}`.toLowerCase().includes(stockQuery.trim().toLowerCase())).slice(0, 8)
+
+  const directionOptions = type === 'price' || type === 'rsi'
+    ? [['above', 'Crosses above'], ['below', 'Crosses below']]
+    : type === 'movement'
+      ? [['up', 'Moves up'], ['down', 'Moves down']]
+      : type === 'dvm'
+        ? [['either', 'Changes either way'], ['up', 'Score rises'], ['down', 'Score falls']]
+          : type === 'macd' || type === 'maCross'
+            ? [['either', 'Either direction'], ['bullish', 'Bullish'], ['bearish', 'Bearish']]
+            : []
+  const needsThreshold = ['price', 'movement', 'rsi', 'volume', 'dvm'].includes(type)
+  const thresholdLabel = type === 'price' ? 'Price (₹)' : type === 'movement' ? 'Daily move (%)' : type === 'rsi' ? 'RSI level' : type === 'volume' ? 'Relative volume (×)' : 'DVM points'
+  const averagePair = ALERT_AVERAGE_PAIRS[averagePairIndex]
+
+  const describeRule = rule => {
+    const stock = stockOptions.find(item => item.symbol === rule.symbol)
+    if (rule.type === 'price') return `${rule.direction === 'below' ? 'Price below' : 'Price above'} ₹${Number(rule.threshold).toFixed(2)}`
+    if (rule.type === 'movement') return `Daily move ${rule.direction} ${Number(rule.threshold).toFixed(2)}%`
+    if (rule.type === 'breakout') return 'Break above previous 5-year high'
+    if (rule.type === 'rsi') return `RSI ${rule.direction} ${Number(rule.threshold)}`
+    if (rule.type === 'macd') return `${rule.direction} MACD crossover`
+    if (rule.type === 'volume') return `Relative volume ≥ ${Number(rule.threshold).toFixed(2)}×`
+    if (rule.type === 'high52') return 'New 52-week high'
+    if (rule.type === 'maCross') return `${rule.fastLabel} crosses ${rule.direction} ${rule.slowLabel}`
+    if (rule.type === 'dvm') return `DVM changes ${rule.direction} by ${Number(rule.threshold)}+ points`
+    return rule.type === 'earnings' ? 'New earnings announcement' : 'New related news'
+  }
+
+  const submit = event => {
+    event.preventDefault()
+    if (!symbol || (needsThreshold && (!Number.isFinite(Number(threshold)) || Number(threshold) <= 0))) return
+    onCreate({
+      symbol,
+      type,
+      ...(needsThreshold ? { threshold: Number(threshold) } : {}),
+      ...(directionOptions.length ? { direction } : {}),
+      ...(type === 'maCross' ? averagePair : {})
+    })
+  }
+
+  return <section className="card analysis-section custom-alert-manager">
+    <div className="dividend-heading">
+      <div><h2>🔔 CUSTOM ALERTS</h2><p>One-time alerts from live stock refreshes, headlines, and NSE announcements.</p></div>
+      <span className="dividend-count">{rules.filter(rule => rule.enabled).length} active</span>
+    </div>
+    <form className="custom-alert-form" onSubmit={submit}>
+      <label className="custom-alert-stock-picker">Stock<input type="search" value={stockQuery} onFocus={() => setShowStockSuggestions(true)} onChange={event => { setStockQuery(event.target.value); setSymbol(''); setShowStockSuggestions(true) }} placeholder="Search symbol or company" aria-label="Search stock for alert" required />{showStockSuggestions && <div className="custom-alert-stock-suggestions">{matchingStocks.map(stock => <button type="button" key={stock.symbol} onClick={() => { setSymbol(stock.symbol); setStockQuery(`${stock.s} · ${stock.n}`); setShowStockSuggestions(false) }}><strong>{stock.s}</strong><span>{stock.n}</span></button>)}{matchingStocks.length === 0 && <span className="custom-alert-no-matches">No matching stocks</span>}</div>}</label>
+      <label>Alert type<select value={type} onChange={event => { const nextType = event.target.value; setType(nextType); setDirection(nextType === 'movement' ? 'up' : nextType === 'dvm' || nextType === 'macd' || nextType === 'maCross' ? 'either' : 'above') }}>{ALERT_TYPES.map(([value, label]) => <option value={value} key={value}>{label}</option>)}</select></label>
+      {directionOptions.length > 0 && <label>Condition<select value={direction} onChange={event => setDirection(event.target.value)}>{directionOptions.map(([value, label]) => <option value={value} key={value}>{label}</option>)}</select></label>}
+      {needsThreshold && <label>{thresholdLabel}<input type="number" min="0.01" step={type === 'rsi' || type === 'dvm' ? '1' : '0.01'} value={threshold} onChange={event => setThreshold(event.target.value)} required /></label>}
+      {type === 'maCross' && <label>Average pair<select value={averagePairIndex} onChange={event => setAveragePairIndex(Number(event.target.value))}>{ALERT_AVERAGE_PAIRS.map((pair, index) => <option value={index} key={pair.fastKey + pair.slowKey}>{pair.fastLabel} / {pair.slowLabel}</option>)}</select></label>}
+      <button className="custom-alert-add" type="submit"><Bell size={15} /> Add alert</button>
+    </form>
+    {rules.length === 0 ? <div className="no-results">No custom alerts yet.</div> : <div className="custom-alert-list">
+      {rules.map(rule => {
+        const status = rule.lastTriggeredAt ? 'Triggered' : rule.enabled ? 'Active' : 'Paused'
+        return <article className={`custom-alert-row ${rule.enabled ? 'enabled' : 'disabled'}`} key={rule.id}>
+          <span className="custom-alert-status" aria-label={status} title={status}>{rule.enabled ? <Bell size={15} /> : <span className="custom-alert-status-dot" />}</span>
+          <div className="custom-alert-description"><strong>{stockOptions.find(stock => stock.symbol === rule.symbol)?.s || rule.symbol}</strong><span>{describeRule(rule)}</span></div>
+          <span className={`custom-alert-state ${rule.lastTriggeredAt ? 'triggered' : ''}`}>{status}</span>
+          <div className="custom-alert-actions">
+            <button type="button" onClick={() => onToggle(rule.id)} title={rule.enabled ? 'Pause alert' : 'Re-enable alert'} aria-label={`${rule.enabled ? 'Pause' : 'Re-enable'} alert for ${rule.symbol}`}><Power size={15} /></button>
+            <button type="button" onClick={() => onDelete(rule.id)} title="Delete alert" aria-label={`Delete alert for ${rule.symbol}`}><Trash2 size={15} /></button>
+          </div>
+        </article>
+      })}
+    </div>}
+  </section>
 }
+
+const clampScore = (value) => Math.round(Math.min(100, Math.max(0, value)))
+const getDvmTone = (dvm = 0) => {
+  const recommendation = typeof dvm === 'object' ? dvm?.recommendation : null
+  if (recommendation === 'BUY') return 'green'
+  if (recommendation === 'HOLD' || recommendation === 'INSUFFICIENT DATA') return 'orange'
+  if (recommendation === 'AVOID') return 'red'
+  const score = typeof dvm === 'object' ? Number(dvm?.score || 0) : Number(dvm)
+  return score >= 55 ? 'green' : score >= 40 ? 'orange' : 'red'
+}
+const getPatternClass = pattern => `${pattern.direction.toLowerCase()} ${pattern.type.toLowerCase().replace(/\s+/g, '-')}`
+const getDvmStatus = dvm => dvm?.recommendation || 'INSUFFICIENT DATA'
 
 const CandlestickShape = ({ x, y, width, height, payload }) => {
   const { open, high, low, close } = payload || {}
@@ -727,32 +838,6 @@ const CandlestickTooltip = ({ active, payload }) => {
     <span>O ₹{candle.open.toFixed(2)} · H ₹{candle.high.toFixed(2)}</span>
     <span>L ₹{candle.low.toFixed(2)} · C ₹{candle.close.toFixed(2)}</span>
   </div>
-}
-
-// DVM model: Durability, Valuation, and Momentum. Financial fields are used when
-// available; neutral proxies keep the score honest when a stock has no fundamentals.
-const calculateDvmScore = ({ currentPrice, high52, low52, change, rsi, macd, signal, macdHistogram, adx, ema20, ema50, ema200, marketStructure, volumeAnalysis, financials }) => {
-  const performance = financials?.performance || {}
-  const balanceSheet = financials?.balanceSheet || {}
-  const valuationData = financials?.valuation || {}
-  const financialScore = (value, good, bad, fallback = 50) => Number.isFinite(Number(value)) ? value >= good ? 80 : value <= bad ? 20 : 50 + ((value - bad) / (good - bad)) * 30 : fallback
-  const debtScore = Number.isFinite(Number(balanceSheet.debtToEquity)) ? clampScore(90 - Math.min(70, Math.max(0, Number(balanceSheet.debtToEquity)))) : 50
-  const cashFlowScore = Number.isFinite(Number(balanceSheet.freeCashFlow)) ? Number(balanceSheet.freeCashFlow) > 0 ? 75 : 25 : 50
-  const durability = clampScore((financialScore(performance.revenueGrowth, 0.1, -0.1) + financialScore(performance.earningsGrowth, 0.1, -0.1) + financialScore(performance.profitMargin, 0.15, 0) + debtScore + cashFlowScore) / 5)
-  const peScore = Number.isFinite(Number(valuationData.pe)) && Number(valuationData.pe) > 0 ? Number(valuationData.pe) <= 15 ? 80 : Number(valuationData.pe) >= 40 ? 20 : 50 : null
-  const pbScore = Number.isFinite(Number(valuationData.priceToBook)) && Number(valuationData.priceToBook) > 0 ? Number(valuationData.priceToBook) <= 2 ? 75 : Number(valuationData.priceToBook) >= 6 ? 25 : 50 : null
-  const range = high52 - low52
-  const rangePosition = range > 0 ? (currentPrice - low52) / range : 0.5
-  const rangeFallback = clampScore(80 - rangePosition * 45)
-  const valuation = clampScore([peScore, pbScore].filter(Number.isFinite).length ? [peScore, pbScore].filter(Number.isFinite).reduce((total, value) => total + value, 0) / [peScore, pbScore].filter(Number.isFinite).length : rangeFallback)
-  const rsiScore = rsi >= 55 && rsi <= 70 ? 75 : rsi >= 45 && rsi < 55 ? 55 : rsi > 70 ? 45 : rsi >= 30 ? 35 : 20
-  const emaScore = (currentPrice > ema20 ? 20 : 0) + (ema20 > ema50 ? 20 : 0) + (ema50 > ema200 ? 20 : 0)
-  const patternScore = marketStructure?.trend === 'Uptrend' ? 80 : marketStructure?.trend === 'Downtrend' ? 25 : 50
-  const volumeScore = volumeAnalysis?.rvol >= 1 ? 70 : 35
-  const momentum = clampScore((rsiScore + (macd > signal ? 75 : 30) + (macdHistogram > 0 ? 70 : 30) + Math.max(10, Math.min(90, 50 + Number(change || 0) * 5)) + emaScore + patternScore + volumeScore) / 7)
-  const score = clampScore((durability + valuation + momentum) / 3)
-
-  return { durability, valuation, momentum, score, isStrongPerformer: durability >= 55 && valuation >= 55 && momentum >= 55 && score >= 55, methodology: { durability: 'Revenue, earnings, margin, debt, and cash-flow strength', valuation: 'P/E, P/BV, and 52-week value proxy', momentum: 'RSI, EMA trend, MACD, volume, and pattern direction' } }
 }
 
 const analyzeStock = async (stock) => {
@@ -785,10 +870,10 @@ const analyzeStock = async (stock) => {
   const structure = calculateMarketStructure(highs, lows, closes)
   const detectedPattern = detectChartPattern(highs, lows, closes, volumes)
   const pattern = detectedPattern || {
-    type: 'Consolidation',
+    type: 'No clear pattern detected',
     direction: 'Neutral',
-    confidence: 0.5,
-    breakoutLevel: currentPrice
+    confidence: 0,
+    breakoutLevel: null
   }
   
   const latestRsi = Number(rsi[rsi.length - 1] ?? 50)
@@ -817,6 +902,11 @@ const analyzeStock = async (stock) => {
     ? Math.max(...highs.slice(0, -1).filter(value => Number.isFinite(Number(value)) && Number(value) > 0))
     : null
   const latestDailyClose = Number(closes.at(-1))
+  const yearCutoff = (data.timestamps.at(-1) || 0) - 52 * 7 * 24 * 60 * 60
+  const yearHighs = highs.filter((value, index) => data.timestamps[index] >= yearCutoff && Number.isFinite(value) && value > 0)
+  const yearLows = lows.filter((value, index) => data.timestamps[index] >= yearCutoff && Number.isFinite(value) && value > 0)
+  const high52 = yearHighs.length ? Math.max(...yearHighs) : null
+  const low52 = yearLows.length ? Math.min(...yearLows) : null
   const previous20High = Math.max(...closes.slice(-21, -1))
   const breakoutIndex = closes.reduce((latestIndex, close, index) => {
     if (index < 20) return latestIndex
@@ -913,8 +1003,8 @@ const analyzeStock = async (stock) => {
     pattern,
     marketStructure: structure,
     dividends,
-    high52: Math.max(...closes),
-    low52: Math.min(...closes),
+    high52,
+    low52,
     marketCap: Number(meta?.marketCap || 0),
     previous20High,
     averageVolume20,
@@ -946,13 +1036,15 @@ const analyzeStock = async (stock) => {
 
   const scored = scoreSetup(analysisData)
   analysisData.technicalScore = scored.technicalScore
-  analysisData.dvm = calculateDvmScore({ ...analysisData, financials })
+  analysisData.dvm = calculateAiStockScore(analysisData, financials)
   analysisData.profitProbability = calculateProfitProbability(analysisData)
   
   return analysisData
 }
 
 function StockAnalysisDashboard() {
+  const analysisRunningRef = useRef(false)
+  const pendingAnalysisRef = useRef(null)
   const [stocks, setStocks] = useState([])
   const [stockDirectory, setStockDirectory] = useState(STOCK_CONFIG)
   const [trackedStocks, setTrackedStocks] = useState(() => {
@@ -983,6 +1075,18 @@ function StockAnalysisDashboard() {
   const [marketAlerts, setMarketAlerts] = useState([])
   const [alertsLoading, setAlertsLoading] = useState(false)
   const [alertsError, setAlertsError] = useState('')
+  const [alertRules, setAlertRules] = useState(() => {
+    try {
+      const savedRules = JSON.parse(localStorage.getItem('stock-pulse-alert-rules') || '[]')
+      return Array.isArray(savedRules) ? savedRules : []
+    } catch { return [] }
+  })
+  const [customAlertNotifications, setCustomAlertNotifications] = useState(() => {
+    try {
+      const savedEvents = JSON.parse(localStorage.getItem('stock-pulse-custom-alert-events') || '[]')
+      return Array.isArray(savedEvents) ? savedEvents : []
+    } catch { return [] }
+  })
   const [notifications, setNotifications] = useState([])
   const [notificationsOpen, setNotificationsOpen] = useState(false)
   const [readNotificationIds, setReadNotificationIds] = useState(() => {
@@ -1014,6 +1118,11 @@ function StockAnalysisDashboard() {
   }
 
   const loadAnalysis = async (stockList = trackedStocks) => {
+    if (analysisRunningRef.current) {
+      pendingAnalysisRef.current = stockList
+      return
+    }
+    analysisRunningRef.current = true
     setLoading(true)
     const universe = dedupeBySymbol([...stockList, ...STOCK_CONFIG]).slice(0, MAX_ANALYSIS_STOCKS)
     setAnalysisProgress({ completed: 0, total: universe.length })
@@ -1049,7 +1158,13 @@ function StockAnalysisDashboard() {
     } catch (error) {
       console.error('Error loading analysis:', error)
     } finally {
+      analysisRunningRef.current = false
       setLoading(false)
+      if (pendingAnalysisRef.current) {
+        const pendingStockList = pendingAnalysisRef.current
+        pendingAnalysisRef.current = null
+        loadAnalysis(pendingStockList)
+      }
     }
   }
 
@@ -1143,7 +1258,9 @@ function StockAnalysisDashboard() {
 
   useEffect(() => {
     const refreshNotifications = () => {
-      const nextNotifications = getStockNotifications(stocks, newsArticles)
+      const nextNotifications = [...getStockNotifications(stocks, newsArticles), ...customAlertNotifications]
+        .sort((first, second) => new Date(second.createdAt) - new Date(first.createdAt))
+        .slice(0, 100)
       setNotifications(nextNotifications)
       const knownIds = new Set(nextNotifications.map(notification => notification.id))
       setReadNotificationIds(current => {
@@ -1155,12 +1272,41 @@ function StockAnalysisDashboard() {
     refreshNotifications()
     const interval = setInterval(refreshNotifications, 300000)
     return () => clearInterval(interval)
-  }, [stocks, newsArticles])
+  }, [stocks, newsArticles, customAlertNotifications])
+
+  useEffect(() => {
+    if (!stocks.length || !alertRules.some(rule => rule.enabled)) return
+    const evaluated = evaluateAlertRules(alertRules, stocks, newsArticles, marketAlerts)
+    if (JSON.stringify(evaluated.rules) !== JSON.stringify(alertRules)) setAlertRules(evaluated.rules)
+    if (evaluated.events.length) {
+      const compactEvents = evaluated.events.map(event => ({
+        ...event,
+        stock: event.stock ? {
+          s: event.stock.s,
+          n: event.stock.n,
+          symbol: event.stock.symbol,
+          c: event.stock.c,
+          sector: event.stock.sector,
+          currentPrice: event.stock.currentPrice,
+          change: event.stock.change
+        } : null
+      }))
+      setCustomAlertNotifications(current => [...compactEvents, ...current].slice(0, 100))
+    }
+  }, [stocks, newsArticles, marketAlerts, alertRules])
+
+  useEffect(() => {
+    localStorage.setItem('stock-pulse-alert-rules', JSON.stringify(alertRules))
+  }, [alertRules])
+
+  useEffect(() => {
+    localStorage.setItem('stock-pulse-custom-alert-events', JSON.stringify(customAlertNotifications))
+  }, [customAlertNotifications])
 
   useEffect(() => {
     if (!stockUniverseReady) return undefined
     loadAnalysis()
-    const interval = setInterval(loadAnalysis, 300000) // 5 minutes for spike alerts
+    const interval = setInterval(loadAnalysis, 900000)
     return () => clearInterval(interval)
   }, [trackedStocks, stockUniverseReady])
 
@@ -1376,13 +1522,36 @@ function StockAnalysisDashboard() {
     })
   }
 
+  const createAlertRule = draft => {
+    const stock = stocks.find(item => item.symbol === draft.symbol) || stockDirectory.find(item => item.symbol === draft.symbol)
+    if (!stock) return
+    const now = new Date().toISOString()
+    const id = globalThis.crypto?.randomUUID?.() || `alert-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`
+    const rule = initializeAlertRule({ ...draft, id, createdAt: now, enabled: true }, stocks.find(item => item.symbol === draft.symbol))
+    setAlertRules(current => [rule, ...current])
+    saveTrackedStocks(current => current.some(item => item.symbol === stock.symbol) ? current : [...current, stock])
+  }
+
+  const toggleAlertRule = ruleId => {
+    const rule = alertRules.find(item => item.id === ruleId)
+    if (!rule) return
+    const enabled = !rule.enabled
+    const stock = enabled ? stocks.find(item => item.symbol === rule.symbol) : null
+    const updated = enabled
+      ? initializeAlertRule({ ...rule, enabled: true, createdAt: new Date().toISOString(), lastTriggeredAt: null, lastEventKey: null }, stock)
+      : { ...rule, enabled: false }
+    setAlertRules(current => current.map(item => item.id === ruleId ? updated : item))
+  }
+
+  const deleteAlertRule = ruleId => setAlertRules(current => current.filter(rule => rule.id !== ruleId))
+
   const markNotificationRead = notification => {
     setReadNotificationIds(current => {
       const next = current.includes(notification.id) ? current : [...current, notification.id]
       localStorage.setItem('stock-pulse-read-notifications', JSON.stringify(next))
       return next
     })
-    if (notification.stock) setSelectedStock(notification.stock)
+    if (notification.stock) setSelectedStock(stocks.find(stock => stock.symbol === notification.stock.symbol) || notification.stock)
     if (notification.link) window.open(notification.link, '_blank', 'noopener,noreferrer')
   }
 
@@ -1421,7 +1590,8 @@ function StockAnalysisDashboard() {
             </button>
             {notificationsOpen && <div className="notification-panel" role="dialog" aria-label="Notifications">
               <div className="notification-panel-head"><strong>Notifications</strong><button onClick={markAllNotificationsRead} disabled={!unreadNotificationCount}>Mark all read</button></div>
-              {notifications.length === 0 ? <p className="notification-empty">No high-volume price spikes or positive news yet.</p> : <div className="notification-list">{notifications.map(notification => <button className={`notification-item ${readNotificationIds.includes(notification.id) ? 'read' : 'unread'}`} key={notification.id} onClick={() => markNotificationRead(notification)}><span className={`notification-dot ${notification.type}`} /><span><strong>{notification.title}</strong><small>{notification.message}</small><time>{new Date(notification.createdAt).toLocaleString('en-IN', { day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit' })}</time></span></button>)}</div>}
+              {notifications.length === 0 ? <p className="notification-empty">No notifications yet. Set a custom alert from the Alerts tab.</p> : <div className="notification-list">{notifications.map(notification => <button className={`notification-item ${readNotificationIds.includes(notification.id) ? 'read' : 'unread'}`} key={notification.id} onClick={() => markNotificationRead(notification)}><span className={`notification-dot ${notification.type}`} /><span><strong>{notification.title}</strong><small>{notification.message}</small><time>{new Date(notification.createdAt).toLocaleString('en-IN', { day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit' })}</time></span></button>)}</div>}
+              <button className="notification-manage-alerts" onClick={() => { setNotificationsOpen(false); setTab('alerts') }}><Bell size={14} /> Manage alerts</button>
             </div>}
           </div>
           <button className="profile">AI</button>
@@ -1506,7 +1676,7 @@ function StockAnalysisDashboard() {
             🚀 IPOs ({ipos.length})
           </button>
           <button className={tab === 'alerts' ? 'active' : ''} onClick={() => setTab('alerts')}>
-            🚨 Alerts ({marketAlerts.length})
+            🔔 Alerts ({alertRules.filter(rule => rule.enabled).length})
           </button>
           <button className={tab === 'watchlist' ? 'active' : ''} onClick={() => setTab('watchlist')}>
             ⭐ Watchlist ({watchlistStocks.length})
@@ -1563,7 +1733,7 @@ function StockAnalysisDashboard() {
                           <td className="stock-name">
                             <strong>{stock.s}</strong>
                             <small>{stock.n}</small>
-                            <span className={`dvm-badge ${getDvmTone(stock.dvm?.score)}`} title={`Durability: ${stock.dvm?.durability || 0} · Valuation: ${stock.dvm?.valuation || 0} · Momentum: ${stock.dvm?.momentum || 0}`}>
+                            <span className={`dvm-badge ${getDvmTone(stock.dvm)}`} title={`Durability: ${stock.dvm?.durability ?? 'N/A'} · Valuation: ${stock.dvm?.valuation ?? 'N/A'} · Momentum: ${stock.dvm?.momentum ?? 'N/A'} · Growth: ${stock.dvm?.growth ?? 'N/A'} · Quality: ${stock.dvm?.quality ?? 'N/A'} · Technical: ${stock.dvm?.technical ?? 'N/A'} · Coverage: ${stock.dvm?.coverage || 'Limited'}`}>
                               DVM {stock.dvm?.score || 0} · {getDvmStatus(stock.dvm)}
                             </span>
                             <div className="stock-tags">
@@ -1703,9 +1873,10 @@ function StockAnalysisDashboard() {
               <IpoCalendar ipos={visibleIpos} stocks={stocks} newsArticles={newsArticles} loading={ipoLoading} error={ipoError} onSelect={setSelectedIpo} />
             )}
 
-            {tab === 'alerts' && (
+            {tab === 'alerts' && <>
+              <AlertManager stocks={stocks} stockDirectory={stockDirectory} rules={alertRules} onCreate={createAlertRule} onToggle={toggleAlertRule} onDelete={deleteAlertRule} />
               <MarketAlerts alerts={marketAlerts} loading={alertsLoading} error={alertsError} />
-            )}
+            </>}
 
             {selectedStock && <StockDetailPanel stock={selectedStock} newsArticles={newsArticles} onClose={() => setSelectedStock(null)} isWatched={watchlistSymbols.includes(selectedStock.symbol)} onToggleWatchlist={toggleWatchlist} />}
             {selectedIpo && <IpoDetailPanel ipo={selectedIpo} stocks={stocks} newsArticles={newsArticles} onClose={() => setSelectedIpo(null)} />}
@@ -1735,7 +1906,7 @@ function StockGrid({ stocks, newsArticles, onSelect, watchlistSymbols, onToggleW
             <div>
               <h3>{stock.s}</h3>
               <p>{stock.n}</p>
-              <span className={`dvm-badge ${getDvmTone(stock.dvm?.score)}`}>DVM {stock.dvm?.score || 0}</span>
+              <span className={`dvm-badge ${getDvmTone(stock.dvm)}`} title={`AI stock score · ${stock.dvm?.coverage || 'Limited'} fundamentals`}>DVM {stock.dvm?.score || 0} · {getDvmStatus(stock.dvm)}</span>
               <span className="card-sector">{resolveSector(stock)} sector</span>
             </div>
             <span className={`direction ${stock.change >= 0 ? 'bull' : 'bear'}`}>
@@ -2440,58 +2611,205 @@ function StockScreener({ stocks, onSelect }) {
   )
 }
 
+function DetailDisclosure({ title, children, meta = null, className = '' }) {
+  return <details className={`detail-disclosure ${className}`}>
+    <summary className="detail-disclosure-heading">
+      <span>{title}</span>
+      {meta && <small>{meta}</small>}
+      <ChevronDown className="detail-disclosure-chevron" size={16} aria-hidden="true" />
+    </summary>
+    <div className="detail-disclosure-content">{children}</div>
+  </details>
+}
+
 function FinancialsSection({ financials }) {
+  const [isExpanded, setIsExpanded] = useState(false)
   const valuation = financials.valuation || {}
   const performance = financials.performance || {}
   const balanceSheet = financials.balanceSheet || {}
+  const ownership = financials.ownership || {}
   const latestYear = financials.latestYear || {}
-  const cards = [
-    ['P/E ratio', formatFinancialNumber(valuation.pe)],
-    ['Forward P/E', formatFinancialNumber(valuation.forwardPe)],
-    ['P/BV ratio', formatFinancialNumber(valuation.priceToBook)],
-    ['Market cap', formatFinancialNumber(valuation.marketCap, { currency: true })],
-    ['Dividend yield', formatFinancialNumber(valuation.dividendYield, { percent: true })],
-    ['Dividend / share', formatFinancialNumber(valuation.dividendPerShare, { currency: true })],
-    ['Revenue growth', formatFinancialNumber(performance.revenueGrowth, { percent: true })],
-    ['Gross margin', formatFinancialNumber(performance.grossMargin, { percent: true })],
-    ['Profit margin', formatFinancialNumber(performance.profitMargin, { percent: true })],
-    ['Return on equity', formatFinancialNumber(performance.returnOnEquity, { percent: true })],
-    ['Return on assets', formatFinancialNumber(performance.returnOnAssets, { percent: true })],
-    ['Debt / equity', formatFinancialNumber(balanceSheet.debtToEquity)]
+  const annualTrends = financials.annualTrends || []
+  const formatMetric = (value, kind = 'number') => {
+    if (value === null || value === undefined || value === '' || !Number.isFinite(Number(value))) return 'N/A'
+    if (kind === 'currency') return formatFinancialNumber(value, { currency: true })
+    if (kind === 'percent') return formatFinancialNumber(value, { percent: true })
+    if (kind === 'percentNumber') return `${formatFinancialNumber(value)}%`
+    return `${formatFinancialNumber(value)}${kind === 'multiple' ? '×' : ''}`
+  }
+  const groups = [
+    {
+      title: 'Profitability',
+      metrics: [
+        ['Revenue', formatMetric(performance.revenue, 'currency')],
+        ['EBITDA', formatMetric(performance.ebitda, 'currency')],
+        ['Operating profit', formatMetric(performance.operatingIncome, 'currency')],
+        ['Net profit', formatMetric(performance.netIncome ?? latestYear.netIncome, 'currency')],
+        ['EPS', formatMetric(performance.eps, 'currency')],
+        ['ROE', formatMetric(performance.returnOnEquity, 'percent')],
+        ['ROCE', formatMetric(performance.returnOnCapital, 'percent')]
+      ]
+    },
+    {
+      title: 'Financial health',
+      metrics: [
+        ['Debt / equity', formatMetric(balanceSheet.debtToEquity, 'percentNumber')],
+        ['Interest coverage', formatMetric(balanceSheet.interestCoverage, 'multiple')],
+        ['Free cash flow', formatMetric(balanceSheet.freeCashFlow, 'currency')],
+        ['Cash & equivalents', formatMetric(balanceSheet.totalCash, 'currency')],
+        ['Promoter holding', formatMetric(ownership.promoterHolding, 'percent')],
+        ['Promoter pledging', formatMetric(ownership.promoterPledging, 'percent')]
+      ]
+    },
+    {
+      title: 'Valuation',
+      metrics: [
+        ['P/E', formatMetric(valuation.pe, 'multiple')],
+        ['P/B', formatMetric(valuation.priceToBook, 'multiple')],
+        ['EV / EBITDA', formatMetric(valuation.enterpriseValueToEbitda, 'multiple')],
+        ['PEG¹', formatMetric(valuation.peg, 'multiple')],
+        ['Dividend yield', formatMetric(valuation.dividendYield, 'percent')]
+      ]
+    }
   ]
-  const cashFlow = balanceSheet.freeCashFlow
+  const trendRows = [
+    ['Revenue', 'revenue', 'currency'],
+    ['EBITDA', 'ebitda', 'currency'],
+    ['Operating profit', 'operatingProfit', 'currency'],
+    ['Net profit', 'netProfit', 'currency'],
+    ['EPS', 'eps', 'currency'],
+    ['ROE', 'returnOnEquity', 'percent'],
+    ['Debt / equity', 'debtToEquity', 'percent'],
+    ['Free cash flow', 'freeCashFlow', 'currency']
+  ]
+  const formatTrend = (value, kind) => {
+    if (value === null || value === undefined || !Number.isFinite(Number(value))) return 'N/A'
+    if (kind === 'currency') return formatFinancialNumber(value, { currency: true })
+    return formatFinancialNumber(value, { percent: true })
+  }
   const healthMessage = Number.isFinite(Number(performance.profitMargin))
     ? `${Number(performance.profitMargin) >= 0.1 ? 'Profitable' : 'Low-margin'} business${Number.isFinite(Number(balanceSheet.debtToEquity)) ? ` with ${Number(balanceSheet.debtToEquity) <= 100 ? 'moderate' : 'elevated'} leverage` : ''}.`
     : 'Review the latest reported metrics before making an investment decision.'
 
   return (
-    <div className="financials-section">
-      <div className="financials-heading">
+    <details className="financials-section" open={isExpanded} onToggle={event => setIsExpanded(event.currentTarget.open)}>
+      <summary className="financials-heading">
         <div>
-          <h3>Financial health</h3>
-          <p>Latest available Yahoo Finance fundamentals</p>
+          <h3>Fundamental Analysis</h3>
+          <p>Latest reported annual figures · fiscal year {latestYear.year?.slice(0, 4) || 'unavailable'}</p>
         </div>
         <span className="financials-source">{financials.currency || 'INR'}</span>
-      </div>
-      <div className="financials-grid">
-        {cards.map(([label, value]) => <div className="financial-metric" key={label}><span>{label}</span><strong>{value}</strong></div>)}
-      </div>
+        <ChevronDown className="financials-toggle-icon" size={16} aria-hidden="true" />
+      </summary>
+      {groups.map(group => <section className="financials-group" key={group.title}>
+        <h4>{group.title}</h4>
+        <div className="financials-grid">
+          {group.metrics.map(([label, value]) => <div className="financial-metric" key={label}><span>{label}</span><strong>{value}</strong></div>)}
+        </div>
+      </section>)}
       <div className="financials-summary">
         <strong>{healthMessage}</strong>
-        <span>FCF {formatFinancialNumber(cashFlow, { currency: true })} · EPS {formatFinancialNumber(performance.eps, { currency: true })} · Operating cash flow {formatFinancialNumber(balanceSheet.operatingCashFlow, { currency: true })}</span>
+        <span>Operating cash flow {formatMetric(balanceSheet.operatingCashFlow, 'currency')} · Gross profit {formatMetric(performance.grossProfit, 'currency')} · Operating margin {formatMetric(performance.operatingMargin, 'percent')}</span>
       </div>
       <div className="financials-details">
-        <div><span>Operating margin</span><b className={financialTone(performance.operatingMargin)}>{formatFinancialNumber(performance.operatingMargin, { percent: true })}</b></div>
-        <div><span>Current ratio</span><b>{formatFinancialNumber(balanceSheet.currentRatio)}</b></div>
-        <div><span>Latest net income</span><b>{formatFinancialNumber(latestYear.netIncome, { currency: true })}</b></div>
-        <div><span>Total debt</span><b>{formatFinancialNumber(balanceSheet.totalDebt, { currency: true })}</b></div>
-        <div><span>Gross profit</span><b>{formatFinancialNumber(performance.grossProfit, { currency: true })}</b></div>
-        <div><span>Operating income</span><b>{formatFinancialNumber(performance.operatingIncome, { currency: true })}</b></div>
-        <div><span>Total assets</span><b>{formatFinancialNumber(latestYear.totalAssets, { currency: true })}</b></div>
-        <div><span>Total liabilities</span><b>{formatFinancialNumber(latestYear.totalLiabilities, { currency: true })}</b></div>
+        <div><span>Forward P/E</span><b>{formatMetric(valuation.forwardPe, 'multiple')}</b></div>
+        <div><span>Market cap</span><b>{formatMetric(valuation.marketCap, 'currency')}</b></div>
+        <div><span>Dividend / share</span><b>{formatMetric(valuation.dividendPerShare, 'currency')}</b></div>
+        <div><span>Revenue growth</span><b>{formatMetric(performance.revenueGrowth, 'percent')}</b></div>
+        <div><span>Gross margin</span><b>{formatMetric(performance.grossMargin, 'percent')}</b></div>
+        <div><span>Profit margin</span><b>{formatMetric(performance.profitMargin, 'percent')}</b></div>
+        <div><span>Return on assets</span><b>{formatMetric(performance.returnOnAssets, 'percent')}</b></div>
+        <div><span>Current ratio</span><b>{formatMetric(balanceSheet.currentRatio)}</b></div>
+        <div><span>Total debt</span><b>{formatMetric(balanceSheet.totalDebt, 'currency')}</b></div>
+        <div><span>Total assets</span><b>{formatMetric(latestYear.totalAssets, 'currency')}</b></div>
+        <div><span>Total liabilities</span><b>{formatMetric(latestYear.totalLiabilities, 'currency')}</b></div>
+        <div><span>Shareholders' equity</span><b>{formatMetric(latestYear.totalEquity, 'currency')}</b></div>
       </div>
-      <small className="financials-disclaimer">Fundamentals are informational, may be delayed, and vary by sector. This is not investment advice.</small>
-    </div>
+      <div className="financials-trends">
+        <div className="financials-trends-heading">
+          <h4>Annual trends</h4>
+          <span>{annualTrends.length} reported {annualTrends.length === 1 ? 'year' : 'years'}</span>
+        </div>
+        {annualTrends.length ? <div className="financials-table-scroll">
+          <table className="financials-table">
+            <thead><tr><th>Metric</th>{annualTrends.map(period => <th key={period.year}>FY {period.year.slice(0, 4)}</th>)}</tr></thead>
+            <tbody>{trendRows.map(([label, key, kind]) => <tr key={key}>
+              <th scope="row">{label}</th>
+              {annualTrends.map(period => <td key={period.year}>{formatTrend(period[key], kind)}</td>)}
+            </tr>)}</tbody>
+          </table>
+        </div> : <p className="financials-unavailable">Annual trend data is unavailable for this listing.</p>}
+        <small>Yahoo Finance currently returns {annualTrends.length} annual periods for this listing; older reports may not be available. PEG¹ uses the CAGR of reported annual EPS.</small>
+      </div>
+      <small className="financials-disclaimer">EBITDA, interest coverage, cash & equivalents, and promoter ownership are not supplied by this data source. Fundamentals are informational, may be delayed, and are not investment advice.</small>
+    </details>
+  )
+}
+
+function ShareholdingSection({ shareholding, loading, error }) {
+  const periods = shareholding?.periods || []
+  const latest = periods.at(-1)
+  const previous = periods.at(-2)
+  const metrics = [
+    ['Promoter', 'promoter'],
+    ['FII / FPI', 'fii'],
+    ['DII', 'dii'],
+    ['Public', 'public'],
+    ['Mutual funds', 'mutualFunds'],
+    ['Insurance', 'insurance'],
+    ['Promoter pledged', 'promoterPledging']
+  ]
+  const formatPercent = value => value !== null && value !== undefined && value !== '' && Number.isFinite(Number(value)) ? `${Number(value).toFixed(2)}%` : 'N/A'
+  const formatChange = (current, prior) => {
+    if (current === null || current === undefined || prior === null || prior === undefined) return null
+    if (!Number.isFinite(Number(current)) || !Number.isFinite(Number(prior))) return null
+    return Number(current) - Number(prior)
+  }
+  const formatQuarter = date => date ? new Date(`${date}T12:00:00Z`).toLocaleDateString('en-IN', { month: 'short', year: 'numeric' }) : 'N/A'
+
+  return (
+    <details className="shareholding-section">
+      <summary className="financials-heading shareholding-summary">
+        <div>
+          <h3>Shareholding Analysis</h3>
+          <p>NSE filings · latest reported quarter {latest ? formatQuarter(latest.date) : ''}</p>
+        </div>
+        <span className="financials-source">{periods.length} quarters</span>
+        <ChevronDown className="financials-toggle-icon" size={16} aria-hidden="true" />
+      </summary>
+      {loading ? <div className="financials-loading">Loading shareholding filings...</div> : error ? (
+        <div className="financials-unavailable">Shareholding data is temporarily unavailable.</div>
+      ) : periods.length === 0 ? (
+        <div className="financials-unavailable">No NSE shareholding filings are available for this listing.</div>
+      ) : (
+        <>
+          <div className="shareholding-metrics">
+            {metrics.map(([label, key]) => {
+              const change = previous ? formatChange(latest[key], previous[key]) : null
+              const direction = change === null || change === 0 ? 'flat' : change > 0 ? 'up' : 'down'
+              return <div className="shareholding-metric" key={key}>
+                <span>{label}</span>
+                <strong>{formatPercent(latest[key])}</strong>
+                <small className={`shareholding-change ${direction}`}>
+                  {previous ? `${formatPercent(previous[key])} → ${formatPercent(latest[key])}` : 'First reported period'}
+                  {change !== null && <b>{change > 0 ? ' ↑ +' : change < 0 ? ' ↓ ' : ' · '}{change !== 0 ? `${Math.abs(change).toFixed(2)} pp` : 'no change'}</b>}
+                </small>
+              </div>
+            })}
+          </div>
+          <div className="shareholding-table-scroll">
+            <table className="shareholding-table">
+              <thead><tr><th>As of</th><th>Promoter</th><th>FII / FPI</th><th>DII</th><th>Public</th><th>Mutual funds</th><th>Insurance</th><th>Promoter pledged</th></tr></thead>
+              <tbody>{[...periods].reverse().map(period => <tr key={period.date}>
+                <th scope="row">{formatQuarter(period.date)}</th>
+                {metrics.map(([, key]) => <td key={key}>{formatPercent(period[key])}</td>)}
+              </tr>)}</tbody>
+            </table>
+          </div>
+          <small className="financials-disclaimer">Changes compare consecutive NSE filings and are shown in percentage points. FII / FPI is Foreign Portfolio Investor Category I + II; DII is the NSE domestic-institutions subtotal.</small>
+        </>
+      )}
+    </details>
   )
 }
 
@@ -2501,6 +2819,9 @@ function StockDetailPanel({ stock, newsArticles, onClose, isWatched, onToggleWat
   const [chartLoading, setChartLoading] = useState(true)
   const [financials, setFinancials] = useState(null)
   const [financialsLoading, setFinancialsLoading] = useState(true)
+  const [shareholding, setShareholding] = useState(null)
+  const [shareholdingLoading, setShareholdingLoading] = useState(true)
+  const [shareholdingError, setShareholdingError] = useState(false)
   const [showVwap, setShowVwap] = useState(true)
   const [zoomRange, setZoomRange] = useState({ startIndex: 0, endIndex: 0 })
 
@@ -2541,6 +2862,21 @@ function StockDetailPanel({ stock, newsArticles, onClose, isWatched, onToggleWat
         setFinancials(data)
         setFinancialsLoading(false)
       }
+    })
+    return () => { cancelled = true }
+  }, [stock.symbol])
+
+  useEffect(() => {
+    let cancelled = false
+    setShareholdingLoading(true)
+    setShareholding(null)
+    setShareholdingError(false)
+    fetchShareholding(stock.symbol).then(data => {
+      if (!cancelled) setShareholding(data)
+    }).catch(() => {
+      if (!cancelled) setShareholdingError(true)
+    }).finally(() => {
+      if (!cancelled) setShareholdingLoading(false)
     })
     return () => { cancelled = true }
   }, [stock.symbol])
@@ -2658,8 +2994,10 @@ function StockDetailPanel({ stock, newsArticles, onClose, isWatched, onToggleWat
       ['Risk-reward', reportValue(stock.riskReward)]
     ], [208, 138, 34])
     addSection('DVM and probability', [
-      ['DVM score', `${reportValue(stock.dvm?.score)}/100`],
+      ['Overall AI stock score', `${reportValue(stock.dvm?.score)}/100 - ${getDvmStatus(stock.dvm)}`],
       ['Durability / valuation / momentum', [stock.dvm?.durability, stock.dvm?.valuation, stock.dvm?.momentum].map(value => `${reportValue(value)}/100`).join(' / ')],
+      ['Growth / quality / technical', [stock.dvm?.growth, stock.dvm?.quality, stock.dvm?.technical].map(value => `${reportValue(value)}/100`).join(' / ')],
+      ['Fundamental data coverage', stock.dvm?.coverage || 'Limited'],
       ['Profit probability', `${reportValue(stock.profitProbability)}%`],
       ['Intraday / swing bias', `${stock.intradayBias || 'Neutral'} / ${stock.swingBias || 'Neutral'}`]
     ], [139, 98, 201])
@@ -2727,9 +3065,18 @@ function StockDetailPanel({ stock, newsArticles, onClose, isWatched, onToggleWat
           </div>
           <p>{stock.c} | {resolveSector(stock)}</p>
           <div className="popup-dvm-summary">
-            <strong>DVM {stock.dvm?.score || 0}/100</strong>
-            <span className={`dvm-status ${getDvmTone(stock.dvm?.score)}`}>{getDvmStatus(stock.dvm)}</span>
-            <small>Durability {stock.dvm?.durability || 0} · Valuation {stock.dvm?.valuation || 0} · Momentum {stock.dvm?.momentum || 0}</small>
+            <strong>Overall: {stock.dvm?.score || 0}/100 — {getDvmStatus(stock.dvm)}</strong>
+            <small>Six-factor, rules-based score · {stock.dvm?.coverage || 'Limited'} fundamental coverage</small>
+            <div className="popup-dvm-factors" aria-label="AI stock score factors">
+              {[
+                ['Durability', stock.dvm?.durability],
+                ['Valuation', stock.dvm?.valuation],
+                ['Momentum', stock.dvm?.momentum],
+                ['Growth', stock.dvm?.growth],
+                ['Quality', stock.dvm?.quality],
+                ['Technical', stock.dvm?.technical]
+              ].map(([label, value]) => <span key={label}><small>{label}</small><b>{value ?? 'N/A'}</b></span>)}
+            </div>
           </div>
         </div>
         <div className="panel-actions">
@@ -2764,8 +3111,9 @@ function StockDetailPanel({ stock, newsArticles, onClose, isWatched, onToggleWat
           </div>
         </div>
 
+        <DetailDisclosure title="Stock Summary" className="detail-disclosure-stock-summary">
         <div className="stock-summary">
-          <div className="stock-summary-heading"><h3>Stock Summary</h3><span className={`summary-signal ${stock.change >= 0 ? 'positive' : 'negative'}`}>{stock.change >= 0 ? 'Positive day' : 'Negative day'}</span></div>
+          <div className="stock-summary-heading"><span className={`summary-signal ${stock.change >= 0 ? 'positive' : 'negative'}`}>{stock.change >= 0 ? 'Positive day' : 'Negative day'}</span></div>
           <p className="stock-description"><strong>About the stock:</strong> {getStockDescription(stock)}</p>
           <p>{getStockSummary(stock)}</p>
           <div className="stock-summary-grid">
@@ -2773,9 +3121,13 @@ function StockDetailPanel({ stock, newsArticles, onClose, isWatched, onToggleWat
             <div><span>Pattern</span><strong>{stock.pattern?.type || 'Consolidation'}</strong></div>
             <div><span>RSI</span><strong>{Number.isFinite(Number(stock.rsi)) ? stock.rsi.toFixed(1) : 'N/A'}</strong></div>
             <div><span>Technical score</span><strong>{stock.technicalScore || 0}/100</strong></div>
+            <div><span>52-week high</span><strong>{Number.isFinite(stock.high52) ? `₹${stock.high52.toFixed(2)}` : 'N/A'}</strong></div>
+            <div><span>52-week low</span><strong>{Number.isFinite(stock.low52) ? `₹${stock.low52.toFixed(2)}` : 'N/A'}</strong></div>
           </div>
         </div>
+        </DetailDisclosure>
 
+        <DetailDisclosure title="Pros & Cons">
         <div className="pros-cons-section">
           <div className="pros-cons-column pros">
             <h3>Pros</h3>
@@ -2786,20 +3138,10 @@ function StockDetailPanel({ stock, newsArticles, onClose, isWatched, onToggleWat
             {prosCons.cons.length ? prosCons.cons.map(con => <p key={con}>- {con}</p>) : <p>No major warning signal detected by the current model.</p>}
           </div>
         </div>
+        </DetailDisclosure>
 
-        {financialsLoading ? (
-          <div className="financials-loading">Loading financial health...</div>
-        ) : financials ? (
-          <FinancialsSection financials={financials} />
-        ) : (
-          <div className="financials-loading">Financial data is temporarily unavailable.</div>
-        )}
-
+        <DetailDisclosure title="Recent Price Candles" meta={CHART_TIMEFRAMES[selectedTimeframe].detail}>
         <div className="detail-chart">
-          <div className="detail-chart-header">
-            <h3>Recent Price Candles</h3>
-            <span>{CHART_TIMEFRAMES[selectedTimeframe].detail}</span>
-          </div>
           <div className="chart-timeframes" role="group" aria-label="Chart timeframe">
             {Object.entries(CHART_TIMEFRAMES).map(([key, timeframe]) => (
               <button key={key} className={selectedTimeframe === key ? 'active' : ''} onClick={() => setSelectedTimeframe(key)}>
@@ -2832,7 +3174,18 @@ function StockDetailPanel({ stock, newsArticles, onClose, isWatched, onToggleWat
             <div className="detail-chart-empty">Price chart unavailable</div>
           )}
         </div>
+        </DetailDisclosure>
 
+        {financialsLoading ? (
+          <div className="financials-loading">Loading financial health...</div>
+        ) : financials ? (
+          <FinancialsSection financials={financials} />
+        ) : (
+          <div className="financials-loading">Financial data is temporarily unavailable.</div>
+        )}
+        <ShareholdingSection shareholding={shareholding} loading={shareholdingLoading} error={shareholdingError} />
+
+        <DetailDisclosure title="Technical Indicators">
         <div className="indicators-grid">
           <div className="indicator-box">
             <label>RSI (14)</label>
@@ -2870,9 +3223,10 @@ function StockDetailPanel({ stock, newsArticles, onClose, isWatched, onToggleWat
             <small>Target {stock.swingTarget?.toFixed(2)} | SL {stock.swingStopLoss?.toFixed(2)}</small>
           </div>
         </div>
+        </DetailDisclosure>
 
+        <DetailDisclosure title="Risk Management">
         <div className="support-resistance">
-          <h3>Risk Management</h3>
           <div className="level">
             <span>Intraday Target ({stock.intradayRiskDirection || 'Long'})</span>
             <strong>₹{stock.intradayTarget?.toFixed(2)}</strong>
@@ -2890,9 +3244,10 @@ function StockDetailPanel({ stock, newsArticles, onClose, isWatched, onToggleWat
             <strong>₹{stock.swingStopLoss?.toFixed(2)}</strong>
           </div>
         </div>
+        </DetailDisclosure>
 
+        <DetailDisclosure title="EMA Alignment">
         <div className="ema-section">
-          <h3>EMA Alignment</h3>
           <div className="ema-check">
             {stock.currentPrice > stock.ema9 ? <CheckCircle size={16} className="check" /> : <AlertCircle size={16} className="alert" />}
             <span>Price &gt; EMA 9: {stock.currentPrice?.toFixed(2)} &gt; {stock.ema9?.toFixed(2)}</span>
@@ -2910,9 +3265,10 @@ function StockDetailPanel({ stock, newsArticles, onClose, isWatched, onToggleWat
             <span>EMA 50 &gt; EMA 200: {stock.ema50?.toFixed(2)} &gt; {stock.ema200?.toFixed(2)}</span>
           </div>
         </div>
+        </DetailDisclosure>
 
+        <DetailDisclosure title="Support & Resistance">
         <div className="support-resistance">
-          <h3>Support & Resistance</h3>
           <div className="level">
             <span>Resistance</span>
             <strong>₹{stock.resistance?.toFixed(2)}</strong>
@@ -2926,39 +3282,47 @@ function StockDetailPanel({ stock, newsArticles, onClose, isWatched, onToggleWat
             <strong>₹{stock.support?.toFixed(2)}</strong>
           </div>
         </div>
+        </DetailDisclosure>
 
-        {stock.pattern && (
-          <div className="pattern-analysis">
-            <h3>Chart Pattern</h3>
+        <DetailDisclosure title="Chart Pattern">
+        <div className="pattern-analysis">
+          {stock.pattern?.type === 'No clear pattern detected' ? (
+            <p className="pattern-empty-state">No clear chart pattern was detected in the available price history.</p>
+          ) : stock.pattern ? (
             <div className={`pattern-info-full ${getPatternClass(stock.pattern)}`}>
               <div className="pattern-type-display">{stock.pattern.type}</div>
               <div className="pattern-details">
                 <span>Direction: <strong>{stock.pattern.direction}</strong></span>
                 <span>Confidence: <strong>{(stock.pattern.confidence * 100).toFixed(0)}%</strong></span>
-                <span>Breakout Level: <strong>₹{stock.pattern.breakoutLevel?.toFixed(2)}</strong></span>
+                <span>Breakout Level: <strong>{stock.pattern.breakoutLevel !== null && stock.pattern.breakoutLevel !== undefined && Number.isFinite(Number(stock.pattern.breakoutLevel)) ? `₹${Number(stock.pattern.breakoutLevel).toFixed(2)}` : 'N/A'}</strong></span>
               </div>
             </div>
-          </div>
-        )}
+          ) : (
+            <p className="pattern-empty-state">Chart pattern data is unavailable.</p>
+          )}
+        </div>
+        </DetailDisclosure>
 
+        <DetailDisclosure title="Market Structure">
         <div className="market-structure">
-          <h3>Market Structure</h3>
           <div className="structure-info">
             <span>Trend: <strong>{stock.marketStructure?.trend}</strong></span>
             <span>Structure: <strong>{stock.marketStructure?.structure}</strong></span>
           </div>
         </div>
+        </DetailDisclosure>
 
+        <DetailDisclosure title={`Technical Score · ${stock.technicalScore}/100`}>
         <div className="score-breakdown">
-          <h3>Technical Score: {stock.technicalScore}/100</h3>
           <div className="score-bar">
             <div className="fill" style={{width: `${stock.technicalScore}%`}}></div>
           </div>
         </div>
+        </DetailDisclosure>
 
         {stock.dividends?.length > 0 && (
+          <DetailDisclosure title="Dividend Details">
           <div className="support-resistance dividend-details">
-            <h3>Dividend Details</h3>
             {stock.dividends.map(dividend => (
               <div className="level" key={`${dividend.date}-${dividend.amount}`}>
                 <span>{new Date(dividend.date * 1000).toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' })} | {dividend.type}</span>
@@ -2966,8 +3330,10 @@ function StockDetailPanel({ stock, newsArticles, onClose, isWatched, onToggleWat
               </div>
             ))}
           </div>
+          </DetailDisclosure>
         )}
 
+        <DetailDisclosure title="Research Links">
         <div className="external-links">
           <a href={`https://www.nseindia.com/market-data/live-equity-market`} target="_blank" rel="noreferrer">
             <Globe2 size={16} /> NSE Market
@@ -2976,6 +3342,7 @@ function StockDetailPanel({ stock, newsArticles, onClose, isWatched, onToggleWat
             <Newspaper size={16} /> Moneycontrol
           </a>
         </div>
+        </DetailDisclosure>
       </div>
     </div>
   )

@@ -119,7 +119,43 @@
   flex: 1 1 auto;
   color: #65ead2;
   font-size: 10px;
+  white-space: normal;
+}
+
+.detail-panel .popup-dvm-summary > small {
+  flex-basis: 100%;
+}
+
+.detail-panel .popup-dvm-factors {
+  display: grid;
+  flex: 1 1 100%;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 5px;
+}
+
+.detail-panel .popup-dvm-factors > span {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 4px;
+  min-width: 0;
+  padding: 4px 6px;
+  border: 1px solid rgba(255, 255, 255, .16);
+  border-radius: 5px;
+  background: rgba(255, 255, 255, .08);
+}
+
+.detail-panel .popup-dvm-factors > span small {
+  overflow: hidden;
+  color: #c6dced;
+  font-size: 8px;
+  text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.detail-panel .popup-dvm-factors > span b {
+  color: #fff;
+  font-size: 9px;
 }
 
 .detail-panel .panel-actions {
@@ -264,4 +300,90 @@
     margin: 0;
   }
 
+}
+
+.detail-panel .detail-disclosure {
+  margin: 0 0 10px;
+  border-bottom: 1px solid #d9e3ed;
+}
+
+.detail-panel .detail-disclosure-heading {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-height: 43px;
+  padding: 9px 4px;
+  color: var(--ink);
+  cursor: pointer;
+  list-style: none;
+  user-select: none;
+}
+
+.detail-panel .detail-disclosure-heading::-webkit-details-marker {
+  display: none;
+}
+
+.detail-panel .detail-disclosure-heading > span {
+  font: 700 13px Manrope;
+}
+
+.detail-panel .detail-disclosure-heading > small {
+  margin-left: auto;
+  color: var(--muted);
+  font-size: 9px;
+}
+
+.detail-panel .detail-disclosure-heading:focus-visible {
+  outline: 2px solid var(--blue);
+  outline-offset: 2px;
+  border-radius: 4px;
+}
+
+.detail-panel .detail-disclosure-chevron {
+  flex: 0 0 auto;
+  margin-left: auto;
+  color: var(--muted);
+  transition: transform .18s ease;
+}
+
+.detail-panel .detail-disclosure[open] .detail-disclosure-chevron {
+  transform: rotate(180deg);
+}
+
+.detail-panel .detail-disclosure-content {
+  padding: 0 4px 12px;
+}
+
+.detail-panel .detail-disclosure-stock-summary .stock-summary {
+  margin: 0;
+  padding: 0;
+  border: 0;
+  background: transparent;
+}
+
+.detail-panel .detail-disclosure-stock-summary .stock-summary-heading {
+  justify-content: flex-end;
+}
+
+.detail-panel .detail-disclosure-content > .pros-cons-section,
+.detail-panel .detail-disclosure-content > .detail-chart,
+.detail-panel .detail-disclosure-content > .indicators-grid,
+.detail-panel .detail-disclosure-content > .support-resistance,
+.detail-panel .detail-disclosure-content > .ema-section,
+.detail-panel .detail-disclosure-content > .pattern-analysis,
+.detail-panel .detail-disclosure-content > .market-structure,
+.detail-panel .detail-disclosure-content > .score-breakdown {
+  margin-bottom: 0;
+}
+
+.detail-panel .detail-disclosure-content > .detail-chart {
+  margin-top: 0;
+}
+
+.detail-panel .shareholding-section:not([open]) > .shareholding-summary {
+  margin-bottom: 0;
+}
+
+.detail-panel .shareholding-section:not([open]) .financials-toggle-icon {
+  transform: rotate(-90deg);
 }

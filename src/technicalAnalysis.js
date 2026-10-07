@@ -292,17 +292,20 @@ export const detectChartPattern = (high, low, close, volume) => {
   
   // Bullish Flag
   if (len >= 20) {
-    const recent = close.slice(-20)
-    const isUptrend = recent[recent.length - 1] > recent[0]
-    const flagRange = Math.max(...recent) - Math.min(...recent)
-    const avgRange = flagRange / recent.length
-    
-    if (isUptrend && avgRange < flagRange * 0.05) {
+    const poleStart = close[len - 20]
+    const poleHigh = Math.max(...high.slice(-20, -5))
+    const flagHigh = Math.max(...high.slice(-5))
+    const flagLow = Math.min(...low.slice(-5))
+    const poleMove = poleHigh - poleStart
+    const flagRange = flagHigh - flagLow
+    const pullback = poleMove > 0 ? (poleHigh - flagLow) / poleMove : Infinity
+
+    if (poleStart > 0 && poleMove >= poleStart * 0.05 && pullback >= 0 && pullback <= 0.5 && flagRange <= poleMove * 0.5) {
       patterns.push({
         type: 'Bullish Flag',
         direction: 'Bullish',
         confidence: 0.72,
-        breakoutLevel: Math.max(...recent) + flagRange
+        breakoutLevel: flagHigh
       })
     }
   }
